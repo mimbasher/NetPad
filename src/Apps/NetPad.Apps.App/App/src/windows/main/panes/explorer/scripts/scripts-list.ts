@@ -1,16 +1,18 @@
 import {watch} from "@aurelia/runtime-html";
 import {
+    ContextMenuOptions,
     IAppService,
     IDataConnectionService,
-    IEventBus,
     IScriptService,
     ISession,
-    ScriptDirectoryChangedEvent,
+    RunOptions,
     ScriptEnvironment,
+    ScriptsStore,
     ScriptSummary,
     Settings,
     ViewModelBase
 } from "@application";
+import {DialogUtil} from "@application/dialogs/dialog-util";
 import {Util} from "@common";
 import {ILogger} from "aurelia";
 import {ScriptFolderViewModel} from "./script-folder-view-model";
@@ -19,12 +21,16 @@ import {ScriptViewModel} from "./script-view-model";
 export class ScriptsList extends ViewModelBase {
     private readonly rootScriptFolder: ScriptFolderViewModel;
     private scriptsMap: Map<string, ScriptViewModel>;
+    public scriptContextMenuOptions: ContextMenuOptions;
+    public folderContextMenuOptions: ContextMenuOptions;
 
-    constructor(@ISession private readonly session: ISession,
+    constructor(private readonly element: HTMLElement,
+                @ISession private readonly session: ISession,
                 @IScriptService private readonly scriptService: IScriptService,
                 @IAppService private readonly appService: IAppService,
                 @IDataConnectionService private readonly dataConnectionService: IDataConnectionService,
-                @IEventBus private readonly eventBus: IEventBus,
+                private readonly dialogUtil: DialogUtil,
+                private readonly scriptsStore: ScriptsStore,
                 private readonly settings: Settings,
                 @ILogger logger: ILogger) {
 
@@ -34,19 +40,139 @@ export class ScriptsList extends ViewModelBase {
         this.rootScriptFolder.expanded = true;
     }
 
-    public async attached() {
-        try {
-            this.loadScripts(await this.scriptService.getScripts());
-        } catch (ex) {
-            this.logger.error("Error loading scripts", ex);
-        }
+    public binding() {
+        this.scriptContextMenuOptions = new ContextMenuOptions(".tree-row.script", [
+            {
+                text: "Open",
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script?.path) {
+                        await this.session.openByPath(script.path).catch(() => undefined);
+                    }
+                }
+            },
+            {
+                icon: "run",
+                text: "Run",
+                show: (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (!script?.environment) return false;
+                    const status = script.environment.status;
+                    return status !== "Running" && status !== "Stopping";
+                },
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script) await this.scriptService.run(script.id, new RunOptions());
+                }
+            },
+            {
+                icon: "stop",
+                text: "Stop",
+                show: (target) => {
+                    const script = this.getScriptFromElement(target);
+                    return script?.environment?.status === "Running";
+                },
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script) await this.scriptService.stop(script.id, undefined);
+                }
+            },
+            {
+                icon: "rename",
+                text: "Rename",
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script) await this.scriptService.openRenamePrompt(script);
+                }
+            },
+            {
+                icon: "duplicate",
+                text: "Duplicate",
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script) await this.scriptService.duplicate(script.id);
+                }
+            },
+            {
+                isDivider: true
+            },
+            {
+                icon: "open-external",
+                text: "Open Containing Folder",
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (script) await this.appService.openFolderContainingScript(script.path);
+                }
+            },
+            {
+                isDivider: true
+            },
+            {
+                icon: "delete",
+                text: "Delete",
+                onSelected: async (target) => {
+                    const script = this.getScriptFromElement(target);
+                    if (!script) return;
 
-        this.eventBus.subscribeToServer(ScriptDirectoryChangedEvent, msg => {
-            this.loadScripts(msg.scripts);
-        });
+                    const confirmation = await this.dialogUtil.ask({
+                        title: "Delete Script",
+                        message: `Delete '${script.name}'? This cannot be undone.`,
+                        buttons: [{text: "Cancel"}, {text: "Delete", cssClasses: "btn-danger"}]
+                    });
+
+                    if (confirmation.value === "Delete") {
+                        await this.scriptService.delete(script.id);
+                    }
+                }
+            }
+        ]);
+
+        this.folderContextMenuOptions = new ContextMenuOptions(".tree-row.script-folder", [
+            {
+                icon: "folder-open",
+                text: "Open in File Manager",
+                onSelected: async (target) => {
+                    const folder = this.getFolderFromElement(target);
+                    if (folder) await this.appService.openScriptsFolder(folder.path);
+                }
+            },
+            {
+                isDivider: true
+            },
+            {
+                icon: "delete",
+                text: "Delete",
+                show: (target) => {
+                    const folder = this.getFolderFromElement(target);
+                    return folder != null && folder.path !== "/";
+                },
+                onSelected: async (target) => {
+                    const folder = this.getFolderFromElement(target);
+                    if (!folder) {
+                        return;
+                    }
+
+                    const confirmation = await this.dialogUtil.ask({
+                        title: "Delete Folder",
+                        message: `Delete folder '${folder.name}' and the ${folder.containingScriptCount} scripts it contains? This cannot be undone.`,
+                        buttons: [{text: "Cancel"}, {text: "Delete", cssClasses: "btn-danger"}]
+                    });
+
+                    if (confirmation.value === "Delete") {
+                        await this.scriptService.deleteFolder(folder.path);
+                    }
+                }
+            }
+        ]);
     }
 
-    public async openScriptsFolder(folder: ScriptFolderViewModel) {
+    public attached() {
+        this.loadScripts(this.scriptsStore.scripts);
+        this.addDisposable(this.scriptsStore.onChanged(() => this.loadScripts(this.scriptsStore.scripts)));
+    }
+
+    public async openScriptsFolder(folder: ScriptFolderViewModel, event?: Event) {
+        event?.stopPropagation(); // Don't toggle row expansion
         await this.appService.openScriptsFolder(folder.path);
     }
 
@@ -61,14 +187,9 @@ export class ScriptsList extends ViewModelBase {
     }
 
     private loadScripts(summaries: ScriptSummary[]) {
-        const scripts = summaries.map(s => new ScriptViewModel(s));
+        const scripts = summaries.map(s => new ScriptViewModel(s, this.settings));
 
-        const expandedFolders = new Set<string>();
-        this.rootScriptFolder.recurseFolders(folder => {
-            if (folder.expanded) {
-                expandedFolders.add(folder.path);
-            }
-        });
+        const expandedFolders = this.rootScriptFolder.findFolders(f => f.expanded);
 
         const root = this.rootScriptFolder.clone();
 
@@ -76,6 +197,10 @@ export class ScriptsList extends ViewModelBase {
             this.settings.scriptsDirectoryPath.replaceAll("\\", "/"), "/");
 
         for (const script of scripts) {
+            if (!script.path) {
+                continue;
+            }
+
             let path = script.path.replaceAll("\\", "/");
 
             if (path.startsWith(scriptsDirPath)) {
@@ -93,7 +218,7 @@ export class ScriptsList extends ViewModelBase {
 
         this.rootScriptFolder.scripts = root.scripts;
         this.rootScriptFolder.folders = root.folders;
-        this.rootScriptFolder.updateStats(expandedFolders);
+        this.rootScriptFolder.updateStats(new Set(expandedFolders.map(f => f.path)));
 
         this.scriptsMap = new Map<string, ScriptViewModel>(scripts.map(s => [s.id, s]));
         this.hydrateScriptMarkers();
@@ -134,5 +259,37 @@ export class ScriptsList extends ViewModelBase {
             const script = this.scriptsMap.get(activeScriptId);
             if (script) script.isActive = true;
         }
+    }
+
+    private getScriptFromElement(element: Element): ScriptViewModel | undefined {
+        const id = this.getElementAttribute(element, "data-script-id");
+        return id ? this.scriptsMap.get(id) : undefined;
+    }
+
+    private getFolderFromElement(element: Element): ScriptFolderViewModel | undefined {
+        const path = this.getElementAttribute(element, "data-folder-path");
+        if (!path) {
+            return undefined;
+        }
+
+        if (this.rootScriptFolder.path === path) {
+            return this.rootScriptFolder;
+        }
+
+        return this.rootScriptFolder.findFolder(folder => folder.path === path);
+    }
+
+    private getElementAttribute(element: Element, attributeName: string): string | null {
+        let el: Element | null = element;
+
+        do {
+            const value = el.getAttribute(attributeName);
+            if (value) {
+                return value;
+            }
+            el = el.parentElement === this.element.parentElement ? null : el.parentElement;
+        } while (el);
+
+        return null;
     }
 }

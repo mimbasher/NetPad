@@ -1,13 +1,12 @@
 import {ILogger} from "aurelia";
-import {WithDisposables} from "@common";
-import {IBackgroundService, IShortcutManager} from "@application";
+import {currentOs, Util, WithDisposables} from "@common";
+import {IBackgroundService} from "@application";
 import {IMainMenuService} from "@application/main-menu/imain-menu-service";
 import {IMenuItem} from "@application/main-menu/imenu-item";
-import {Menu, MenuItemOptions, PredefinedMenuItemOptions, Submenu} from "@tauri-apps/api/menu"
+import {Menu, MenuItemOptions, PredefinedMenuItemOptions, Submenu, SubmenuOptions} from "@tauri-apps/api/menu"
 import {Window} from "@tauri-apps/api/window"
 import {MenuItem} from "@tauri-apps/api/menu/menuItem";
 import {PredefinedMenuItem} from "@tauri-apps/api/menu/predefinedMenuItem";
-import {invoke} from "@tauri-apps/api/core";
 
 /**
  * Manages the Tauri main menu.
@@ -15,9 +14,16 @@ import {invoke} from "@tauri-apps/api/core";
 export class NativeMainMenuEventHandler extends WithDisposables implements IBackgroundService {
     private readonly logger: ILogger;
 
+    private readonly rebuildMenu = Util.debounceAsync(this, async () => {
+        try {
+            await this.buildAndSetMenu();
+        } catch (err) {
+            this.logger.error("Failed to build and set native menu:", err);
+        }
+    }, 150, true);
+
     constructor(
         @IMainMenuService private readonly mainMenuService: IMainMenuService,
-        @IShortcutManager private readonly shortcutManager: IShortcutManager,
         @ILogger logger: ILogger) {
         super();
         this.logger = logger.scopeTo(nameof(NativeMainMenuEventHandler));
@@ -28,13 +34,30 @@ export class NativeMainMenuEventHandler extends WithDisposables implements IBack
             return Promise.resolve();
         }
 
-        const appMenuItems = new Map<string, IMenuItem>(
-            this.mainMenuService.items
-                .flatMap(x => x.menuItems && x.menuItems.length > 0 ? x.menuItems : [x])
-                .map(x => [x.id!, x])
-        );
+        this.addDisposable(this.mainMenuService.onChanged(() => this.rebuildMenu()));
 
-        const isMac = await invoke("get_os_type") === "macos";
+        try {
+            await this.mainMenuService.initialized;
+        } catch (err) {
+            this.logger.error("Main menu initial hydration failed; building native menu anyway:", err);
+        }
+
+        this.rebuildMenu();
+    }
+
+    private async buildAndSetMenu(): Promise<void> {
+        const isMac = currentOs === "macos";
+
+        const appMenuItems = new Map<string, IMenuItem>();
+        for (const top of this.mainMenuService!.items) {
+            if (top.menuItems && top.menuItems.length > 0) {
+                for (const child of top.menuItems) {
+                    if (child.id) appMenuItems.set(child.id, child);
+                }
+            } else if (top.id) {
+                appMenuItems.set(top.id, top);
+            }
+        }
 
         const menu = await Menu.new({
             items: [
@@ -64,9 +87,12 @@ export class NativeMainMenuEventHandler extends WithDisposables implements IBack
                     text: "File",
                     items: [
                         await this.fromAppMenuItem(appMenuItems, "file.new"),
+                        await this.fromAppMenuItem(appMenuItems, "file.open"),
+                        await this.fromAppMenuItem(appMenuItems, "file.openRecent"),
                         await this.fromAppMenuItem(appMenuItems, "file.goToScript"),
                         await PredefinedMenuItem.new({item: "Separator"}),
                         await this.fromAppMenuItem(appMenuItems, "file.save"),
+                        await this.fromAppMenuItem(appMenuItems, "file.saveAs"),
                         await this.fromAppMenuItem(appMenuItems, "file.saveAll"),
                         await this.fromAppMenuItem(appMenuItems, "file.properties"),
                         await this.fromAppMenuItem(appMenuItems, "file.close"),
@@ -93,12 +119,12 @@ export class NativeMainMenuEventHandler extends WithDisposables implements IBack
                         await this.fromAppMenuItem(appMenuItems, "edit.find"),
                         await this.fromAppMenuItem(appMenuItems, "edit.replace"),
                         await PredefinedMenuItem.new({item: "Separator"}),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform1"),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform2"),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform3"),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform4"),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform5"),
-                        await this.fromAppMenuItem(appMenuItems, "edit.transform6"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToUpperOrLowerCase"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToUpperCase"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToLowerCase"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToTitleCase"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToKebabCase"),
+                        await this.fromAppMenuItem(appMenuItems, "edit.transformToSnakeCase"),
                         await PredefinedMenuItem.new({item: "Separator"}),
                         await this.fromAppMenuItem(appMenuItems, "edit.toggleLineComment"),
                         await this.fromAppMenuItem(appMenuItems, "edit.toggleBlockComment"),
@@ -120,7 +146,7 @@ export class NativeMainMenuEventHandler extends WithDisposables implements IBack
                         await this.fromAppMenuItem(appMenuItems, "view.zoomOut"),
                         await this.fromAppMenuItem(appMenuItems, "view.resetZoom"),
                         await PredefinedMenuItem.new({item: "Separator"}),
-                        await this.fromAppMenuItem(appMenuItems, "view.fullScreen"),
+                        await this.fromAppMenuItem(appMenuItems, "view.toggleFullScreen"),
                     ].filter(x => x).map(x => x!)
                 }),
                 await Submenu.new({
@@ -171,47 +197,44 @@ export class NativeMainMenuEventHandler extends WithDisposables implements IBack
                 item: "Separator"
             });
         } else if (menuItem.menuItems) {
-            this.logger.error("Mapping submenus is not implemented. Attempted to map: ", menuItem);
-            return undefined;
+            return await this.buildSubmenu(menuItem);
         } else {
             return await MenuItem.new(<MenuItemOptions>{
                 id: menuItem.id,
                 text: menuItem.text,
-                accelerator: this.getAccelerator(menuItem),
-                action: id => {
-                    if (menuItem.click) {
-                        menuItem.click();
-                    } else if (menuItem.shortcut) {
-                        this.shortcutManager.executeShortcut(menuItem.shortcut);
-                    }
-                }
+                accelerator: menuItem.accelerator,
+                action: () => this.select(menuItem)
             });
         }
     }
 
-    private getAccelerator(menuItem: IMenuItem): string | undefined {
-        if (menuItem.shortcut) {
-            const combo = [...menuItem.shortcut.keyCombo.asArray];
-            const accelerator: string[] = [];
+    private async buildSubmenu(parent: IMenuItem): Promise<Submenu> {
+        const items: (Submenu | MenuItem | PredefinedMenuItem)[] = [];
 
-            for (const part of combo) {
-                const lower = part.toLowerCase();
-                if (lower === "meta") {
-                    accelerator.push("Meta");
-                } else if (lower === "alt") {
-                    accelerator.push("Alt");
-                } else if (lower === "ctrl") {
-                    accelerator.push("CmdOrCtrl");
-                } else if (lower === "shift") {
-                    accelerator.push("Shift");
-                } else {
-                    accelerator.push(part);
-                }
+        for (const child of parent.menuItems ?? []) {
+            if (child.isDivider) {
+                items.push(await PredefinedMenuItem.new({item: "Separator"}));
+            } else if (child.menuItems) {
+                items.push(await this.buildSubmenu(child));
+            } else {
+                items.push(await MenuItem.new(<MenuItemOptions>{
+                    id: child.id,
+                    text: child.text ?? "",
+                    accelerator: child.accelerator,
+                    action: () => this.select(child)
+                }));
             }
-
-            return accelerator.join("+");
         }
 
-        return menuItem.helpText?.replaceAll(" ", "");
+        return await Submenu.new(<SubmenuOptions>{
+            id: parent.id,
+            text: parent.text ?? "",
+            enabled: !parent.disabled,
+            items
+        });
+    }
+
+    private select(menuItem: IMenuItem) {
+        void this.mainMenuService.clickMenuItem(menuItem);
     }
 }

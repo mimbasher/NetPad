@@ -1,7 +1,7 @@
-import {IUserSecretService, Pane, UserSecretListingDto} from "@application";
+import {INotificationService, IUserSecretService, Pane, PaneIds, UserSecretListingDto} from "@application";
 import {resolve} from "aurelia";
+import {html} from "@common";
 import {DialogUtil} from "@application/dialogs/dialog-util";
-import {ToastUtil} from "@application/toasts/toast-util";
 
 interface NewSecret {
     key?: string;
@@ -21,9 +21,10 @@ export class SecretsManagerPane extends Pane {
 
     private readonly userSecretService: IUserSecretService = resolve(IUserSecretService);
     private readonly dialogUtil: DialogUtil = resolve(DialogUtil);
+    private readonly notificationService: INotificationService = resolve(INotificationService);
 
     constructor() {
-        super("Secrets", "secrets-manager-icon");
+        super(PaneIds.secretsManager, "Secrets", "secrets");
     }
 
     public attached() {
@@ -43,14 +44,14 @@ export class SecretsManagerPane extends Pane {
 
     public async copyKeyToClipboard(secret: UserSecretListingDto) {
         await navigator.clipboard.writeText(secret.key);
-        ToastUtil.showToast("Copied to clipboard", null, 1000);
+        this.notificationService.notify("Copied to clipboard", "Transient");
     }
 
     public async copyUnprotectedValueToClipboard(secret: UserSecretListingDto) {
         let value = await this.userSecretService.getUnprotectedValue(secret.key);
         value ??= "";
         await navigator.clipboard.writeText(value);
-        ToastUtil.showToast("Copied to clipboard", null, 1000);
+        this.notificationService.notify("Copied to clipboard", "Transient");
     }
 
     public async startNewSecret() {
@@ -118,8 +119,8 @@ export class SecretsManagerPane extends Pane {
     public async deleteSecret(secret: UserSecretListingDto) {
         const result = await this.dialogUtil.ask({
             title: "Delete Secret",
-            message: `Are you sure you want to delete <code class="fw-bold">${secret.key}</code>? This is not reversible!`,
-            buttons: [{text: "Delete"}, {text: "Cancel", isPrimary: true}],
+            messageHtml: html`Are you sure you want to delete <code>${secret.key}</code>? This is not reversible!`,
+            buttons: [{text: "Cancel"}, {text: "Delete", cssClasses: "btn-danger"}],
         });
 
         if (result.value !== "Delete") {
@@ -131,6 +132,7 @@ export class SecretsManagerPane extends Pane {
         if (ix >= 0) {
             this.secrets.splice(ix, 1);
         }
-        ToastUtil.showToast("Deleted", null, 1000);
+
+        this.notificationService.notify(`Deleted secret '${secret.key}'`, "Notice");
     }
 }

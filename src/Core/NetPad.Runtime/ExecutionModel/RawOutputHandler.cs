@@ -20,11 +20,13 @@ internal class RawOutputHandler
     private uint _rawErrorPushOrder;
     private readonly ConcurrentQueue<(uint order, string output)> _rawOutputs;
     private readonly ConcurrentQueue<(uint order, string output)> _rawErrors;
+    private readonly IOutputWriter<object> _scriptOutputWriter;
     private readonly Action PushOutputs;
     private readonly Action PushErrors;
 
     public RawOutputHandler(IOutputWriter<object> scriptOutputWriter)
     {
+        _scriptOutputWriter = scriptOutputWriter;
         _rawOutputs = new();
         _rawErrors = new();
 
@@ -39,7 +41,8 @@ internal class RawOutputHandler
 
             string finalOutput = list.OrderBy(x => x.order).Select(x => x.output).JoinToString("\n") + "\n";
 
-            await scriptOutputWriter.WriteAsync(new RawScriptOutput(
+            await scriptOutputWriter.WriteAsync(new ScriptOutput(
+                ScriptOutputKind.Result,
                 Interlocked.Increment(ref _rawOutputPushOrder) - 1,
                 finalOutput));
         }).DebounceAsync();
@@ -55,7 +58,8 @@ internal class RawOutputHandler
 
             string finalOutput = list.OrderBy(x => x.order).Select(x => x.output).JoinToString("\n") + "\n";
 
-            await scriptOutputWriter.WriteAsync(new ErrorScriptOutput(
+            await scriptOutputWriter.WriteAsync(new ScriptOutput(
+                ScriptOutputKind.Error,
                 Interlocked.Increment(ref _rawErrorPushOrder) - 1,
                 finalOutput));
         }).DebounceAsync();
@@ -79,5 +83,35 @@ internal class RawOutputHandler
     {
         _rawErrors.Enqueue((Interlocked.Increment(ref _rawErrorOrder) - 1, output));
         PushErrors();
+    }
+
+    /// <summary>
+    /// Immediately flushes any buffered output and error messages, bypassing the debounce delay.
+    /// Call after the external process has exited to ensure all output is delivered before
+    /// returning results.
+    /// </summary>
+    public void Flush()
+    {
+        FlushQueue(_rawOutputs, ref _rawOutputPushOrder, isError: false);
+        FlushQueue(_rawErrors, ref _rawErrorPushOrder, isError: true);
+    }
+
+    private void FlushQueue(ConcurrentQueue<(uint order, string output)> queue, ref uint pushOrder, bool isError)
+    {
+        var list = new List<(uint order, string output)>();
+
+        while (queue.TryDequeue(out var item))
+            list.Add(item);
+
+        if (list.Count == 0) return;
+
+        string finalOutput = list.OrderBy(x => x.order).Select(x => x.output).JoinToString("\n") + "\n";
+
+        ScriptOutput scriptOutput = new ScriptOutput(
+            isError ? ScriptOutputKind.Error : ScriptOutputKind.Result,
+            Interlocked.Increment(ref pushOrder) - 1,
+            finalOutput);
+
+        _scriptOutputWriter.WriteAsync(scriptOutput).GetAwaiter().GetResult();
     }
 }

@@ -15,7 +15,7 @@ export class ViewModelBase extends WithDisposables {
             throw new Error("logger is null or undefined");
         }
 
-        this.logger = logger.scopeTo((this as Record<string, unknown>).constructor.name)
+        this.logger = logger.scopeTo(this.constructor.name)
         this.componentLifecycleLogger = this.logger.scopeTo("ComponentLifecycle");
     }
 

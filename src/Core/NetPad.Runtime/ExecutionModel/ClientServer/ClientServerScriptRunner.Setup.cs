@@ -63,7 +63,7 @@ public partial class ClientServerScriptRunner
             _script.DataConnection?.Id
         ).CalculateHash();
 
-        // 2. Try compilation cache — local copy avoids TOCTOU if another thread invalidates
+        // 2. Try compilation cache, a local copy avoids TOCTOU if another thread invalidates it
         var cache = _compilationCache;
         bool compilationCacheHit = cache != null && cache.FingerprintHash == fingerprintHash;
 
@@ -79,7 +79,7 @@ public partial class ClientServerScriptRunner
         else
         {
             // Cache miss, resolve dependencies and compile
-            _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Gathering dependencies...");
+            _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Gathering dependencies...");
             dependencies = await _scriptDependencyResolver.GetDependenciesAsync(_script, cancellationToken);
 
             if (cancellationToken.IsCancellationRequested)
@@ -87,7 +87,7 @@ public partial class ClientServerScriptRunner
                 return null;
             }
 
-            _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Compiling...");
+            _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Compiling...");
             var result = await _scriptCompiler.ParseAndCompileAsync(effectiveCode, _script, cancellationToken);
 
             if (result == null || cancellationToken.IsCancellationRequested)
@@ -115,14 +115,14 @@ public partial class ClientServerScriptRunner
                 .Select(d => DiagnosticsHelper.ReduceStacktraceLineNumbers(d, parsingResult.UserProgramStartLineNumber));
 
             await _combinedOutputWriter.WriteAsync(
-                new ErrorScriptOutput("Compilation failed:\n" + errors.JoinToString("\n")),
+                new ScriptOutput(ScriptOutputKind.Error, "Compilation failed:\n" + errors.JoinToString("\n")),
                 cancellationToken: cancellationToken);
 
             return null;
         }
 
         // 4. Deploy compiled script, the script-host, and their dependencies
-        _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Preparing...");
+        _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Preparing...");
 
         if (!_workingDirectory.ScriptHostExecutableFile.Exists())
         {
@@ -146,7 +146,7 @@ public partial class ClientServerScriptRunner
 
         if (deploymentCurrent && lastDeploy != null && lastDeploy.ScriptDir.Exists())
         {
-            // Reuse existing deployment — only rewrite scriptconfig.json (settings may have changed)
+            // Reuse existing deployment, only rewrite scriptconfig.json (settings may have changed)
             scriptDir = lastDeploy.ScriptDir;
             scriptAssemblyFilePath = lastDeploy.ScriptAssemblyFilePath;
             await WriteScriptConfigAsync(scriptDir);

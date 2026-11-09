@@ -39,7 +39,7 @@ public partial class ExternalScriptRunner
             return null;
         }
 
-        _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Preparing...");
+        _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Preparing...");
         var deploymentInfo = await DeployAsync(deploymentDirectory, deployDependencies);
         deploymentDirectory.SaveDeploymentInfo(deploymentInfo);
         return deploymentDirectory;
@@ -83,7 +83,7 @@ public partial class ExternalScriptRunner
             .Where(r => r != null!)
             .ToList();
 
-        _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Resolving dependencies...");
+        _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Resolving dependencies...");
 
         // Resolve all assembly assets
         var referenceAssets = (
@@ -118,7 +118,7 @@ public partial class ExternalScriptRunner
         }
 
         // Parse Code & Compile
-        _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Compiling...");
+        _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Compiling...");
         var (parsingResult, compilationResult) = ParseAndCompile.Do(
             runOptions.SpecificCodeToRun ?? _script.Code,
             _script,
@@ -135,7 +135,7 @@ public partial class ExternalScriptRunner
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => DiagnosticsHelper.ReduceStacktraceLineNumbers(d, parsingResult.UserProgramStartLineNumber));
 
-            await _output.WriteAsync(new ErrorScriptOutput("Compilation failed:\n" + errors.JoinToString("\n")));
+            await _output.WriteAsync(new ScriptOutput(ScriptOutputKind.Error, "Compilation failed:\n" + errors.JoinToString("\n")));
 
             return null;
         }

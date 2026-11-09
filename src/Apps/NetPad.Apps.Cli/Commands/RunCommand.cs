@@ -38,10 +38,7 @@ public static class RunCommand
         bool ForceRebuild,
         bool Verbose,
         List<string> ScriptArgs,
-        OutputFormat OutputFormat)
-    {
-        public bool NoCache { get; set; } = NoCache;
-    }
+        OutputFormat OutputFormat);
 
     public static void AddRunCommand(this RootCommand parent, IServiceProvider serviceProvider)
     {
@@ -178,20 +175,10 @@ public static class RunCommand
                 }
             }
 
-            // Resolve script kind
             var kindStr = p.GetValue(kindOption);
-            ScriptKind? scriptKind = null;
-            if (kindStr != null)
+            if (!Helper.TryParseScriptKind(kindStr, out var scriptKind))
             {
-                if (kindStr.Equals("program", StringComparison.OrdinalIgnoreCase))
-                    scriptKind = ScriptKind.Program;
-                else if (kindStr.Equals("sql", StringComparison.OrdinalIgnoreCase))
-                    scriptKind = ScriptKind.SQL;
-                else
-                {
-                    Presenter.Error($"Unknown script kind '{kindStr}'. Supported values: program, sql.");
-                    return 1;
-                }
+                return 1;
             }
 
             var sdkMajor = p.GetValue(sdkOption);
@@ -278,6 +265,12 @@ public static class RunCommand
     {
         rootCommand.SetAction(async p =>
         {
+            // With no args and no piped input, show help instead of invoking 'run'
+            if (p.UnmatchedTokens.Count == 0 && !Console.IsInputRedirected)
+            {
+                return await rootCommand.Parse("--help").InvokeAsync();
+            }
+
             // Re-invoke with 'run' prepended so the run subcommand handles parsing
             // We don't want attach run symbols to rootCommand directly, otherwise it
             // will leak into every subcommand
@@ -317,7 +310,7 @@ public static class RunCommand
         }
         else
         {
-            // No path, no code, no stdin — prompt for script selection
+            // No path, no code, no stdin: prompt for script selection
             var selectedScriptPath = Helper.SelectScript(serviceProvider, null, "run");
             if (selectedScriptPath == null) return 1;
             script = await Helper.LoadScriptFileAsync(serviceProvider, selectedScriptPath, options.Verbose);
@@ -366,13 +359,19 @@ public static class RunCommand
         // Handle script & runner output
         scriptRunner.AddOutput(new ActionOutputWriter<object>((o, _) =>
         {
-            if (htmlDocumentOutput != null && o is HtmlResultsScriptOutput htmlScriptOutput)
+            if (o is not ScriptOutput so)
             {
-                htmlDocumentOutput.Append(htmlScriptOutput.Body);
+                Console.WriteLine(o);
                 return;
             }
 
-            if (o is HtmlSqlScriptOutput)
+            if (htmlDocumentOutput != null && so is { Kind: ScriptOutputKind.Result })
+            {
+                htmlDocumentOutput.Append(so.Body);
+                return;
+            }
+
+            if (so is { Kind: ScriptOutputKind.Sql })
             {
                 // Do not output
                 return;
@@ -381,30 +380,23 @@ public static class RunCommand
             // If the script process outputs to STDOUT directly it prints to the console directly.
             // But errors might occur before the script is run, ie: compilation errors. In that
             // case the script runner will emit those errors using this output handler.
-            if (!htmlOutput && o is ScriptOutput error)
+            if (!htmlOutput && so is { Kind: ScriptOutputKind.Error })
             {
                 if (jsonOutput)
                 {
                     var errorLine = System.Text.Json.JsonSerializer.Serialize(
-                        new { type = "error", value = error.Body?.ToString() ?? "An error occurred." });
+                        new { type = "error", value = so.Body ?? "An error occurred." });
                     Console.WriteLine(errorLine);
                 }
                 else
                 {
-                    Presenter.Error(error.Body?.ToString() ?? "An error occurred.");
+                    Presenter.Error(so.Body ?? "An error occurred.");
                 }
 
                 return;
             }
 
-            if (o is ScriptOutput scriptOutput)
-            {
-                Console.WriteLine(scriptOutput.Body);
-            }
-            else
-            {
-                Console.WriteLine(o);
-            }
+            Console.WriteLine(so.Body);
         }));
 
         // Configure run options
@@ -448,7 +440,7 @@ public static class RunCommand
                 eventBus.Unsubscribe(token);
             });
 
-            // Script may still be executing after spinner clears — wait for it
+            // Script may still be executing after spinner clears, so wait for it
             if (scriptTask is null)
                 throw new InvalidOperationException("Script task was not initialized.");
             runResult = await scriptTask;

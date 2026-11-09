@@ -1,6 +1,8 @@
-import {WithDisposables} from "@common";
+import {ILogger} from "aurelia";
+import {html, WithDisposables} from "@common";
 import {
     ChannelInfo,
+    ConfirmOpenAsDuplicateCommand,
     ConfirmSaveCommand,
     IBackgroundService,
     IEventBus,
@@ -9,19 +11,23 @@ import {
     YesNoCancel
 } from "@application";
 import {DialogUtil} from "@application/dialogs/dialog-util";
+import {answerBackend} from "@application/background-services/answer-backend";
 import {save} from '@tauri-apps/plugin-dialog'
-import {listen} from '@tauri-apps/api/event';
 
 /**
  * This is utilized for the Tauri app
  * This enables opening specific dialog windows when running the tauri app.
  */
 export class TauriDialogBackgroundService extends WithDisposables implements IBackgroundService {
+    private readonly logger: ILogger;
+
     constructor(@IEventBus readonly eventBus: IEventBus,
                 @IIpcGateway readonly ipcGateway: IIpcGateway,
-                private readonly dialogUtil: DialogUtil
+                private readonly dialogUtil: DialogUtil,
+                @ILogger logger: ILogger
     ) {
         super();
+        this.logger = logger.scopeTo(nameof(TauriDialogBackgroundService));
     }
 
     public start(): Promise<void> {
@@ -37,16 +43,11 @@ export class TauriDialogBackgroundService extends WithDisposables implements IBa
             })
         );
 
-        listen<string>('download-finished', (event) => {
-            const fileSavePath = event.payload;
-
-            if (fileSavePath) {
-                alert("File successfully saved to:\n" + fileSavePath);
-            } else {
-                alert("File successfully saved to your Downloads folder.")
-            }
-
-        }).then(unlisten => this.addDisposable(unlisten));
+        this.addDisposable(
+            this.eventBus.subscribeToServer(ConfirmOpenAsDuplicateCommand, async msg => {
+                await this.confirmOpenAsDuplicate(msg);
+            })
+        );
 
         return Promise.resolve(undefined);
     }
@@ -56,27 +57,27 @@ export class TauriDialogBackgroundService extends WithDisposables implements IBa
     }
 
     private async confirmSave(command: ConfirmSaveCommand) {
-        const response = await this.dialogUtil.ask({
-            title: "Unsaved Changes",
-            message: command.message,
-            buttons: [
-                {
-                    text: "Yes",
-                    isPrimary: true
-                },
-                {
-                    text: "No",
-                },
-                {
-                    text: "Cancel",
-                }
-            ]
+        await this.answer<YesNoCancel>(command.requestId, "Cancel", async () => {
+            const response = await this.dialogUtil.ask({
+                title: "Unsaved Changes",
+                messageHtml: html`<b>${command.scriptName}</b> has unsaved changes. Do you want to save?`,
+                buttons: [
+                    {
+                        text: "Cancel",
+                    },
+                    {
+                        text: "No",
+                    },
+                    {
+                        text: "Yes",
+                        isPrimary: true
+                    }
+                ]
+            });
+
+            const answer = response.value;
+            return answer === "Yes" ? "Yes" : answer === "No" ? "No" : "Cancel";
         });
-
-        const answer = response.value;
-        const ync: YesNoCancel = answer === "Yes" ? "Yes" : answer === "No" ? "No" : "Cancel";
-
-        await this.ipcGateway.send(new ChannelInfo("Respond"), command.id, ync);
     }
 
     private async requestScriptSavePath(command: RequestScriptSavePathCommand) {
@@ -92,6 +93,25 @@ export class TauriDialogBackgroundService extends WithDisposables implements IBa
             ]
         })
 
-        await this.ipcGateway.send(new ChannelInfo("Respond"), command.id, path || null);
+        await this.ipcGateway.send(new ChannelInfo("Respond"), command.requestId, path || null);
+    }
+
+    private async confirmOpenAsDuplicate(command: ConfirmOpenAsDuplicateCommand) {
+        await this.answer(command.requestId, false, async () => {
+            const response = await this.dialogUtil.ask({
+                title: "Duplicate Script ID",
+                message: command.message ?? "",
+                buttons: [
+                    {text: "Open as separate"},
+                    {text: "Go to existing tab", isPrimary: true}
+                ]
+            });
+
+            return response.value === "Open as separate";
+        });
+    }
+
+    private answer<T>(requestId: string, unanswered: T, ask: () => Promise<T>) {
+        return answerBackend(this.ipcGateway, this.logger, requestId, unanswered, ask);
     }
 }

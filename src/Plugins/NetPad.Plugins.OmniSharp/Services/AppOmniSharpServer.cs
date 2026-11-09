@@ -211,38 +211,40 @@ public class AppOmniSharpServer(
             $"RoslynExtensionsOptions:InlayHintsOptions:ForImplicitObjectCreation={settings.OmniSharp.InlayHints.EnableImplicitObjectCreation}"
         }.JoinToString(" ");
 
-        var dotNetRootDir = dotNetInfo.LocateDotNetRootDirectoryForFramework(
-            environment.Script.Config.TargetFrameworkVersion) ?? dotNetInfo.LocateDotNetRootDirectory();
+        var dotNetSdk = GetDotNetSdkForScript();
 
         var omniSharpServer = omniSharpServerFactory.CreateStdioServerFromNewProcess(
             executablePath!,
             Project.ProjectDirectoryPath.Path,
             args,
-            dotNetRootDir);
+            dotNetSdk);
 
         _logger.LogDebug(
-            "Starting omnisharp server\nFrom path: {OmniSharpExePath}\nProject dir: {ProjDirPath}\nWith args: {Args}",
+            "Starting omnisharp server\nFrom path: {OmniSharpExePath}\nProject dir: {ProjDirPath}\nWith args: {Args}\n.NET root: {DotNetRootDir}\nSDK version: {SdkVersion}",
             executablePath,
             Project.ProjectDirectoryPath,
-            args);
+            args,
+            dotNetSdk?.RootDirectoryPath,
+            dotNetSdk?.Version ?? "newest installed");
 
         await omniSharpServer.StartAsync();
 
         omniSharpServer.OnProcessUnexpectedExit = HandleProcessUnexpectedExit;
         _omniSharpServer = omniSharpServer;
         _backgroundTasksCts = new CancellationTokenSource();
-        _projectLoadedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var projectLoadedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _projectLoadedTcs = projectLoadedTcs;
         _lastSuccessfulStart = DateTime.UtcNow;
 
         // Gate all OmniSharp communication until the project is loaded
         omniSharpServer.SubscribeToEvent(EventTypes.ProjectAdded, _ =>
         {
-            _projectLoadedTcs?.TrySetResult();
+            projectLoadedTcs.TrySetResult();
             return Task.CompletedTask;
         });
         omniSharpServer.SubscribeToEvent(EventTypes.ProjectChanged, _ =>
         {
-            _projectLoadedTcs?.TrySetResult();
+            projectLoadedTcs.TrySetResult();
             return Task.CompletedTask;
         });
 
@@ -252,12 +254,14 @@ public class AppOmniSharpServer(
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(20), _backgroundTasksCts.Token);
-                _projectLoadedTcs?.TrySetResult();
+                projectLoadedTcs.TrySetResult();
             }
             catch (OperationCanceledException)
             {
             }
         }, _backgroundTasksCts.Token);
+
+        _ = PublishReadyWhenProjectLoadedAsync(projectLoadedTcs.Task, omniSharpServer);
 
         if (!string.IsNullOrWhiteSpace(environment.Script.Code))
         {
@@ -311,7 +315,7 @@ public class AppOmniSharpServer(
                     {
                         _logger.LogWarning(
                             "No ProjectAdded/ProjectChanged event received within 20s, updating buffers as fallback");
-                        _projectLoadedTcs?.TrySetResult();
+                        projectLoadedTcs.TrySetResult();
                         await UpdateBuffersOnProjectEvent(null!);
                     }
                 }
@@ -322,6 +326,48 @@ public class AppOmniSharpServer(
         }
 
         await eventBus.PublishAsync(new OmniSharpServerStartedEvent(this));
+    }
+
+    private OmniSharpDotNetSdk? GetDotNetSdkForScript()
+    {
+        // Pass the script's own SDK so OmniSharp doesn't choose one itself. Left alone, it uses the newest SDK
+        // installed, which can fail to load the .NET types of a script targeting an older .NET.
+        var sdk = dotNetInfo.LocateLatestSdkForFramework(environment.Script.Config.TargetFrameworkVersion);
+        if (sdk != null)
+        {
+            return new OmniSharpDotNetSdk(sdk.DotNetRootDirectory!, sdk.Version.ToString());
+        }
+
+        var dotNetRootDir = dotNetInfo.LocateDotNetRootDirectory();
+        return dotNetRootDir != null ? new OmniSharpDotNetSdk(dotNetRootDir) : null;
+    }
+
+    private async Task PublishReadyWhenProjectLoadedAsync(Task projectLoaded, IOmniSharpStdioServer server)
+    {
+        try
+        {
+            await projectLoaded;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (!server.IsProcessRunning())
+        {
+            return;
+        }
+
+        try
+        {
+            _logger.LogDebug("OmniSharp server is ready for script {ScriptId}", environment.Script.Id);
+            await eventBus.PublishAsync(new OmniSharpServerReadyEvent(environment.Script.Id));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to publish that the OmniSharp server is ready for script {ScriptId}",
+                environment.Script.Id);
+        }
     }
 
     private async Task StopOmniSharpServerAsync()
@@ -466,11 +512,11 @@ public class AppOmniSharpServer(
         {
             if (ev.Script.Id != environment.Script.Id) return;
 
+            await Project.RemoveDataConnectionReferencesAsync();
             await Project.UpdateTargetFrameworkAsync(ev.NewVersion);
             await Project.RestoreAsync();
 
-            // OmniSharp must be restarted because DOTNET_ROOT (set at process startup) may
-            // point to a different .NET installation for the new target framework.
+            // OmniSharp must be restarted because the SDK it uses is set at startup and cannot be changed without a restart.
             await RestartAsync();
 
             if (ev.Script.DataConnection != null)

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text;
 
 namespace NetPad.IO;
@@ -30,5 +30,20 @@ internal class ActionTextWriter(Action<object?, bool> write) : TextWriter
     public override void WriteLine()
     {
         write("\n", false);
+    }
+
+    public override void Write(char[] buffer, int index, int count)
+    {
+        write(new string(buffer, index, count), false);
+    }
+
+    public override void Write(ReadOnlySpan<char> buffer)
+    {
+        write(new string(buffer), false);
+    }
+
+    public override void WriteLine(ReadOnlySpan<char> buffer)
+    {
+        write(new string(buffer), true);
     }
 }

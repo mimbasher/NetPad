@@ -1,22 +1,28 @@
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.CodeAnalysis;
 using NetPad.Apps.CQs;
 using NetPad.Apps.UiInterop;
+using NetPad.Configuration;
 using NetPad.Data;
 using NetPad.DotNet;
 using NetPad.Dtos;
+using NetPad.Events;
 using NetPad.Exceptions;
 using NetPad.ExecutionModel;
 using NetPad.Scripts;
 using NetPad.Services;
+using NetPad.Sessions;
 
 namespace NetPad.Controllers;
 
 [ApiController]
 [Route("scripts")]
-public class ScriptsController(IMediator mediator) : ControllerBase
+public class ScriptsController(IMediator mediator, IScriptRepository scriptRepository, ISession session)
+    : ControllerBase
 {
     [HttpGet]
     public async Task<IEnumerable<ScriptSummary>> GetScripts()
@@ -24,10 +30,79 @@ public class ScriptsController(IMediator mediator) : ControllerBase
         return await mediator.Send(new GetAllScriptsQuery());
     }
 
-    [HttpPatch("create")]
-    public async Task Create([FromBody] CreateScriptDto dto, [FromServices] IDataConnectionRepository dataConnectionRepository)
+    [HttpGet("info")]
+    public async Task<IEnumerable<ScriptInfo>> GetScriptsInfo([FromQuery] string? name = null)
     {
-        var script = await mediator.Send(new CreateScriptCommand());
+        return await mediator.Send(new GetScriptsInfoQuery(name));
+    }
+
+    [HttpGet("{id:guid}")]
+    public async Task<Script> GetScript(
+        Guid id,
+        [FromServices] ISession session,
+        [FromServices] IScriptRepository scriptRepository)
+    {
+        var environment = session.Get(id);
+        if (environment != null)
+        {
+            return environment.Script;
+        }
+
+        var script = await scriptRepository.GetAsync(id);
+        if (script == null)
+        {
+            throw new ScriptNotFoundException(id);
+        }
+
+        return script;
+    }
+
+    [HttpGet("{id:guid}/code")]
+    public async Task<string> GetCode(
+        Guid id,
+        [FromServices] ISession session,
+        [FromServices] IScriptRepository scriptRepository)
+    {
+        // Try open environment first, fall back to repository
+        var environment = session.Get(id);
+        if (environment != null)
+        {
+            return environment.Script.Code;
+        }
+
+        var script = await scriptRepository.GetAsync(id);
+        if (script == null)
+        {
+            throw new ScriptNotFoundException(id);
+        }
+
+        return script.Code;
+    }
+
+    [HttpPatch("create")]
+    public async Task<Script> Create(
+        [FromBody] CreateScriptDto dto,
+        [FromServices] IDataConnectionRepository dataConnectionRepository)
+    {
+        var script = await mediator.Send(new CreateScriptCommand(dto.Name));
+
+        if (dto.Kind != null)
+            script.Config.SetKind(dto.Kind.Value);
+
+        if (dto.TargetFrameworkVersion != null)
+            script.Config.SetTargetFrameworkVersion(dto.TargetFrameworkVersion.Value);
+
+        if (dto.OptimizationLevel != null)
+            script.Config.SetOptimizationLevel(dto.OptimizationLevel.Value);
+
+        if (dto.UseAspNet != null)
+            script.Config.SetUseAspNet(dto.UseAspNet.Value);
+
+        if (dto.Namespaces != null)
+            script.Config.SetNamespaces(dto.Namespaces);
+
+        if (dto.References is { Length: > 0 })
+            script.Config.SetReferences(dto.References.ToList());
 
         bool hasSeedCode = !string.IsNullOrWhiteSpace(dto.Code);
         if (hasSeedCode)
@@ -47,27 +122,79 @@ public class ScriptsController(IMediator mediator) : ControllerBase
         {
             await mediator.Send(new RunScriptCommand(script.Id, new RunOptions()));
         }
+
+        return script;
     }
 
     [HttpPatch("{id:guid}/rename")]
     public async Task Rename(Guid id, [FromBody] string newName)
     {
-        var environment = await GetScriptEnvironmentAsync(id);
-        await mediator.Send(new RenameScriptCommand(environment.Script, newName));
+        var script = await GetScriptAsync(id);
+        await mediator.Send(new RenameScriptCommand(script, newName));
     }
 
     [HttpPatch("{id:guid}/duplicate")]
-    public async Task Duplicate(Guid id)
+    public async Task<Script> Duplicate(Guid id)
     {
-        var environment = await GetScriptEnvironmentAsync(id);
-        var script = await mediator.Send(new DuplicateScriptCommand(environment.Script));
-        await mediator.Send(new OpenScriptCommand(script));
+        var script = await GetScriptAsync(id);
+        var duplicate = await mediator.Send(new DuplicateScriptCommand(script));
+        await mediator.Send(new OpenScriptCommand(duplicate));
+        return duplicate;
     }
 
     [HttpPatch("{id:guid}/save")]
     public async Task<bool> Save(Guid id, [FromServices] ScriptService scriptService)
     {
         return await scriptService.SaveScriptAsync(id);
+    }
+
+    [HttpPatch("{id:guid}/save-as")]
+    public async Task<bool> SaveAs(Guid id, [FromServices] ScriptService scriptService)
+    {
+        return await scriptService.SaveScriptAsAsync(id);
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task Delete(Guid id)
+    {
+        var script = await GetScriptAsync(id);
+        await mediator.Send(new DeleteScriptCommand(script));
+    }
+
+    [HttpDelete("folder")]
+    public async Task DeleteFolder(
+        [FromQuery] string path,
+        [FromServices] Settings settings,
+        [FromServices] ScriptService scriptService,
+        [FromServices] IAutoSaveScriptRepository autoSaveScriptRepository)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new Exception("A folder path must be provided.");
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine(settings.ScriptsDirectoryPath, path.Trim('.', '/', '\\')));
+
+        if (!fullPath.StartsWith(settings.ScriptsDirectoryPath, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fullPath, settings.ScriptsDirectoryPath, StringComparison.OrdinalIgnoreCase)
+            || !Directory.Exists(fullPath))
+        {
+            throw new Exception($"Invalid or non-existent directory: {path}");
+        }
+
+        var openEnvironments = session.GetOpened()
+            .Where(e => e.Script.Path?.StartsWith(fullPath, StringComparison.OrdinalIgnoreCase) == true)
+            .ToArray();
+
+        if (openEnvironments.Length > 0)
+        {
+            foreach (var environment in openEnvironments)
+            {
+                await scriptService.CloseScriptAsync(environment.Script.Id, true);
+            }
+        }
+
+        Directory.Delete(fullPath, recursive: true);
     }
 
     [HttpPatch("{id:guid}/run")]
@@ -89,18 +216,27 @@ public class ScriptsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}/code")]
-    public async Task UpdateCode(Guid id, [FromBody] string code)
+    public async Task UpdateCode(Guid id, [FromBody] string code, [FromQuery] bool externallyInitiated = false)
     {
         var environment = await GetScriptEnvironmentAsync(id);
-        await mediator.Send(new UpdateScriptCodeCommand(environment.Script, code));
+        await mediator.Send(new UpdateScriptCodeCommand(environment.Script, code, externallyInitiated));
     }
 
     [HttpPatch("{id:guid}/open-config")]
-    public async Task OpenConfigWindow([FromServices] IUiWindowService uiWindowService, Guid id, [FromQuery] string? tab = null)
+    public async Task OpenConfigWindow(
+        [FromServices] IUiWindowService uiWindowService,
+        [FromServices] IEventBus eventBus,
+        Guid id,
+        [FromQuery] string? tab = null)
     {
         var environment = await GetScriptEnvironmentAsync(id);
         var script = environment.Script;
         await uiWindowService.OpenScriptConfigWindowAsync(script, tab);
+        await eventBus.PublishAsync(new WindowDeepLinkRequestedEvent(WindowIds.ScriptConfig, new Dictionary<string, string?>
+        {
+            ["script-id"] = script.Id.ToString(),
+            ["tab"] = tab,
+        }));
     }
 
     [HttpPut("{id:guid}/namespaces")]
@@ -127,12 +263,16 @@ public class ScriptsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> SetScriptKind(Guid id, [FromBody] ScriptKind scriptKind)
     {
         var environment = await GetScriptEnvironmentAsync(id);
-        environment.Script.Config.SetKind(scriptKind);
+
+        await mediator.Send(new UpdateScriptKindCommand(environment.Script, scriptKind));
+
         return NoContent();
     }
 
     [HttpPut("{id:guid}/target-framework-version")]
-    public async Task<IActionResult> SetTargetFrameworkVersion(Guid id, [FromBody] DotNetFrameworkVersion targetFrameworkVersion)
+    public async Task<IActionResult> SetTargetFrameworkVersion(
+        Guid id,
+        [FromBody] DotNetFrameworkVersion targetFrameworkVersion)
     {
         var environment = await GetScriptEnvironmentAsync(id);
 
@@ -201,9 +341,21 @@ public class ScriptsController(IMediator mediator) : ControllerBase
         environment.ClearMemCacheItems();
     }
 
+    private async Task<Script> GetScriptAsync(Guid id)
+    {
+        var script = session.Get(id)?.Script;
+
+        if (script == null)
+        {
+            script = await scriptRepository.GetAsync(id);
+        }
+
+        return script ?? throw new ScriptNotFoundException(id);
+    }
+
     private async Task<ScriptEnvironment> GetScriptEnvironmentAsync(Guid id)
     {
         return await mediator.Send(new GetOpenedScriptEnvironmentQuery(id, true))
-            ?? throw new ScriptNotFoundException(id);
+               ?? throw new ScriptNotFoundException(id);
     }
 }

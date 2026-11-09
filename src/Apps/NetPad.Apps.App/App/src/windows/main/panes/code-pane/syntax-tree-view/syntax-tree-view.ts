@@ -8,12 +8,12 @@ import {
     ISyntaxNodeOrTokenSlim,
     LinePositionSpan,
     Pane,
+    ScriptCodeUpdatedEvent,
     SyntaxNodeOrTokenSlim,
     ViewModelBase
 } from "@application";
 import {LeakyMap, Util} from "@common";
 import {ITextEditorService} from "@application/editor/itext-editor-service";
-import {ScriptCodeUpdatedEvent} from "@application/scripts/script-code-updated-event";
 
 interface ISyntaxNodeOrTokenViewModel extends ISyntaxNodeOrTokenSlim {
     collapsed?: boolean;
@@ -44,13 +44,24 @@ export class SyntaxTreeView extends ViewModelBase {
 
     public attached() {
         this.loadSyntaxTree();
-        this.addDisposable(this.eventBus.subscribe(ScriptCodeUpdatedEvent, () => this.loadSyntaxTree()));
+        this.addDisposable(this.eventBus.subscribe(ScriptCodeUpdatedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadSyntaxTree();
+        }));
+        this.addDisposable(this.eventBus.subscribeToServer(ScriptCodeUpdatedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadSyntaxTree();
+        }));
     }
 
     private onMouseLeave() {
         if (this.decoratorCollection) {
             setTimeout(() => this.decoratorCollection?.clear(), 120);
         }
+    }
+
+    private toggleCollapsed(nodeOrToken: ISyntaxNodeOrTokenViewModel, event: Event) {
+        // Stop the click from also reaching the row, which reveals the node in the editor.
+        event.stopPropagation();
+        nodeOrToken.collapsed = !nodeOrToken.collapsed;
     }
 
     private expand(nodeOrToken: ISyntaxNodeOrTokenViewModel, recursive: boolean) {
@@ -144,7 +155,7 @@ export class SyntaxTreeView extends ViewModelBase {
         this.loadSyntaxTree();
     }
 
-    private loadSyntaxTree = Util.debounce(this, async () => {
+    private loadSyntaxTree = Util.debounceAsync(this, async () => {
             if (!this.pane.isOpen || !this.isActive) {
                 return;
             }

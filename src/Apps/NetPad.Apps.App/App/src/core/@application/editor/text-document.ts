@@ -1,13 +1,16 @@
 import {SubscriptionToken, WithDisposables} from "@common";
 import * as monaco from "monaco-editor";
-import {MonacoEditorUtil, TextLanguage} from "@application";
+import {MonacoEditorUtil} from "@application/editor/monaco/monaco-editor-util";
+import {TextLanguage} from "@application/editor/text-language";
+
+export type TextChangeSetter = TextDocument | "server";
 
 export class TextDocument extends WithDisposables {
     public selection: monaco.Selection | null | undefined;
 
     private _language: TextLanguage;
     private _text: string;
-    private changeHandlers = new Set<(setter: unknown, newText: string) => Promise<void>>();
+    private changeHandlers = new Set<(setter: TextChangeSetter, newText: string) => Promise<void>>();
     private _textModel?: monaco.editor.ITextModel;
 
     constructor(public readonly id: string, language: TextLanguage, text: string) {
@@ -50,7 +53,7 @@ export class TextDocument extends WithDisposables {
         return this._text;
     }
 
-    public async setText(setter: unknown, newValue: string) {
+    public async setText(setter: TextChangeSetter, newValue: string) {
         if (this._text === newValue) return;
 
         this._text = newValue ?? "";
@@ -64,19 +67,22 @@ export class TextDocument extends WithDisposables {
         }
     }
 
-    public onChange(handler: (setter: unknown, newValue: string) => Promise<void>): SubscriptionToken {
-        const wrappedHandler = (setter: unknown, newValue: string) => handler(setter, newValue);
+    public onChange(handler: (setter: TextChangeSetter, newValue: string) => Promise<void>): SubscriptionToken {
+        const wrappedHandler = (setter: TextChangeSetter, newValue: string) => handler(setter, newValue);
         this.changeHandlers.add(wrappedHandler);
         return new SubscriptionToken(() => this.changeHandlers.delete(wrappedHandler));
     }
 
     public changeLanguage(language: TextLanguage) {
         this._language = language;
-        monaco.editor.setModelLanguage(this.textModel, language);
+        // Skip the Monaco update if no model exists yet
+        if (this._textModel) {
+            monaco.editor.setModelLanguage(this._textModel, language);
+        }
     }
 
     public override toString() {
-        return `${(this as Record<string, unknown>).constructor.name}: ${this.id}`;
+        return `${this.constructor.name}: ${this.id}`;
     }
 
     public override dispose(): void {

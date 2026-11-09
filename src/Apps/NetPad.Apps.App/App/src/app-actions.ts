@@ -8,8 +8,9 @@ import {
     IWindowBootstrapperConstructor,
     Settings
 } from "@application";
-import {WindowParams} from "@application/windows/window-params";
-import {WindowId} from "@application/windows/window-id";
+import {WindowParams} from "@application/windowing/window-params";
+import {WindowId} from "@application/windowing/window-id";
+import {expectedFailureHeader} from "@application/api-client-base";
 import {IShell} from "./shells/ishell";
 
 /**
@@ -127,12 +128,27 @@ export const configureFetchClient = (container: IContainer) => {
         config
             .useStandardConfiguration()
             .withInterceptor({
+                request(request: Request): Request | Response | Promise<Request | Response> {
+                    const token = WindowParams.token;
+                    if (token) {
+                        request.headers.set("X-NetPad-Token", token);
+                    }
+                    return request;
+                },
                 requestError(error: unknown): Request | Response | Promise<Request | Response> {
                     if (!isAbortError(error)) logger.error("Request Error", error);
                     throw error;
                 },
                 responseError(error: unknown, request?: Request): Response | Promise<Response> {
-                    if (!isAbortError(error)) logger.error("Response Error", error);
+                    if (!isAbortError(error)) {
+                        // A call that marked itself as expected to fail has already accounted for
+                        // the failure, so we just log a debug line instead of an error.
+                        if (request?.headers.has(expectedFailureHeader)) {
+                            logger.debug("Response Error", error);
+                        } else {
+                            logger.error("Response Error", error);
+                        }
+                    }
                     throw error;
                 }
             })
@@ -151,7 +167,7 @@ export const logRules: ILoggerRule[] = [
                 logLevel: LogLevel.warn
             },
             {
-                loggerRegex: new RegExp(/ShortcutManager/),
+                loggerRegex: new RegExp(/KeybindingManager/),
                 logLevel: LogLevel.warn
             },
             {

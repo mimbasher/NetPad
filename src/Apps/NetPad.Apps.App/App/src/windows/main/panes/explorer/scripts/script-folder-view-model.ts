@@ -14,12 +14,11 @@ export class ScriptFolderViewModel {
             this.expanded = true;
         }
 
-        this.containingScriptCount = this.calculateScriptCounts();
-
-        this.recurseFolders(folder => {
-            this.containingScriptCount += folder.scripts.length;
+        for (const folder of this.folders) {
             folder.updateStats(expandedFolders);
-        });
+        }
+
+        this.containingScriptCount = this.calculateScriptCounts();
     }
 
     public calculateScriptCounts(): number {
@@ -39,6 +38,32 @@ export class ScriptFolderViewModel {
             subFolder.recurseFolders(func);
             func(subFolder);
         }
+    }
+
+    public findFolders(predicate: (folder: ScriptFolderViewModel) => boolean): ScriptFolderViewModel[] {
+        const folders: ScriptFolderViewModel[] = [];
+
+        this.recurseFolders(folder => {
+            if (predicate(folder)) {
+                folders.push(folder);
+            }
+        });
+
+        return folders;
+    }
+
+    public findFolder(predicate: (f: ScriptFolderViewModel) => boolean): ScriptFolderViewModel | undefined {
+        for (const subFolder of this.folders) {
+            if (predicate(subFolder)) {
+                return subFolder;
+            }
+
+            const found = subFolder.findFolder(predicate);
+            if (found) {
+                return found;
+            }
+        }
+        return undefined;
     }
 
     public clone(deep = false): ScriptFolderViewModel {

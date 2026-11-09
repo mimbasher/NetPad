@@ -1,6 +1,7 @@
 mod commands;
 mod dotnet_server_manager;
 mod errors;
+mod startup;
 mod windows;
 
 use std::sync::Mutex;
@@ -8,7 +9,7 @@ use std::sync::Mutex;
 use tauri::{Manager, State, WindowEvent};
 use tauri_plugin_log::{Target, TargetKind};
 
-use crate::commands::{create_window_command, get_os_type, toggle_devtools};
+use crate::commands::{create_window_command, toggle_devtools};
 use crate::dotnet_server_manager::{DotNetServerManager, DotNetServerManagerState};
 use crate::errors::Result;
 use crate::windows::{create_main_window, create_window, WindowCreationOptions};
@@ -37,15 +38,8 @@ pub fn run() -> Result<()> {
         )
         .manage(server_manager_state)
         .setup(move |app| {
-            // Start .NET app and open main window
             if cfg!(not(debug_assertions)) {
-                let state: State<DotNetServerManagerState> = app.state();
-                state
-                    .server_manager_mutex
-                    .lock()
-                    .unwrap()
-                    .start_backend(app.handle())
-                    .expect("Failed to start .NET server");
+                startup::start_backend_and_navigate(app);
             }
 
             create_main_window(app.handle())?;
@@ -68,7 +62,6 @@ pub fn run() -> Result<()> {
         })
         .invoke_handler(tauri::generate_handler![
             create_window_command,
-            get_os_type,
             toggle_devtools,
         ])
         .run(tauri::generate_context!())?;

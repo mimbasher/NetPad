@@ -94,7 +94,8 @@ public class ScriptEnvironmentBackgroundService(
             eventBus,
             _loggerFactory.CreateLogger<ScriptEnvironmentIpcOutputWriter>());
 
-        environment.SetIO(inputReader, outputWriter);
+        environment.SetInput(inputReader);
+        environment.AddOutput(outputWriter);
 
         AddEnvironmentEventToken(environment, new DisposableToken(() => outputWriter.Dispose()));
     }

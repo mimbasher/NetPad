@@ -1,15 +1,13 @@
 import {IContainer} from "aurelia";
-import {watch} from "@aurelia/runtime-html";
 import {
-    CreateScriptDto,
     DataConnectionStore,
     IPaneManager,
-    IScriptService,
     ISession,
-    IShortcutManager,
     MonacoEnvironmentManager,
     PaneHost,
-    PaneHostOrientation
+    PaneHostOrientation,
+    RecentScriptsStore,
+    ScriptsStore
 } from "@application";
 import {
     ClipboardPane,
@@ -17,11 +15,12 @@ import {
     Explorer,
     MemCachePane,
     NamespacesPane,
+    NotificationsPane,
     OutputPane,
     SplitViewController
 } from "./panes";
 import {Workbench} from "./workbench";
-import {WindowBase} from "@application/windows/window-base";
+import {WindowBase} from "@application/windowing/window-base";
 import {SecretsManagerPane} from "./panes/secrets-manager-pane/secrets-manager-pane";
 
 export class Window extends WindowBase {
@@ -32,25 +31,25 @@ export class Window extends WindowBase {
 
     constructor(
         @ISession private readonly session: ISession,
-        @IShortcutManager private readonly shortcutManager: IShortcutManager,
         @IPaneManager private readonly paneManager: IPaneManager,
-        @IScriptService private readonly scriptService: IScriptService,
         @IContainer private readonly container: IContainer,
-        private readonly dataConnectionStore: DataConnectionStore) {
+        private readonly dataConnectionStore: DataConnectionStore,
+        private readonly recentScriptsStore: RecentScriptsStore,
+        private readonly scriptsStore: ScriptsStore) {
         super();
-    }
-
-    public hydrating() {
-        this.shortcutManager.initialize();
     }
 
     public async binding() {
         await MonacoEnvironmentManager.setupMonacoEnvironment(this.container);
         await this.session.initialize();
         await this.dataConnectionStore.initialize();
+        await this.recentScriptsStore.initialize();
+        await this.scriptsStore.initialize();
         this.workbench = this.container.get(Workbench);
 
-        await this.createNewScriptIfNoScriptsOpen();
+        // Creates the initial viewer host, wires workbench-level command handlers.
+        // Must run before the WorkArea component attaches.
+        await this.workbench.workAreaService.initialize();
     }
 
     public attached() {
@@ -62,7 +61,7 @@ export class Window extends WindowBase {
         const sideToSideController = new SplitViewController(
             () => [this.leftPaneHost, middleContentElement, this.rightPaneHost],
             "horizontal",
-            15
+            {[PaneHostOrientation.Left]: 17.3, [PaneHostOrientation.Right]: 15}
         );
 
         this.leftPaneHost = this.paneManager.createPaneHost(PaneHostOrientation.Left, sideToSideController);
@@ -72,12 +71,12 @@ export class Window extends WindowBase {
         this.paneManager.addPaneToHost(NamespacesPane, this.rightPaneHost);
         this.paneManager.addPaneToHost(MemCachePane, this.rightPaneHost);
         this.paneManager.addPaneToHost(ClipboardPane, this.rightPaneHost);
-
+        this.paneManager.addPaneToHost(NotificationsPane, this.rightPaneHost);
 
         const topBottomController = new SplitViewController(
             () => [workAreaElement, this.bottomPaneHost],
             "vertical",
-            50
+            {[PaneHostOrientation.Bottom]: 50}
         );
 
         this.bottomPaneHost = this.paneManager.createPaneHost(PaneHostOrientation.Bottom, topBottomController);
@@ -92,12 +91,5 @@ export class Window extends WindowBase {
 
         // Always start output pane hidden when app starts
         setTimeout(() => outputPane.hide(), 1);
-    }
-
-    @watch<Window>(vm => vm.session.environments.length)
-    private async createNewScriptIfNoScriptsOpen() {
-        if (this.session.environments.length === 0) {
-            await this.scriptService.create(new CreateScriptDto());
-        }
     }
 }

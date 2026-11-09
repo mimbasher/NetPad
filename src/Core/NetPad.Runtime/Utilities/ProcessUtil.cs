@@ -4,6 +4,13 @@ namespace NetPad.Utilities;
 
 public static class ProcessUtil
 {
+    private static readonly string[] _sdkPinningMSBuildVariables =
+    [
+        "MSBuildExtensionsPath",
+        "MSBuildSDKsPath",
+        "MSBUILD_EXE_PATH",
+    ];
+
     public static bool IsProcessRunning(this Process process)
     {
         try
@@ -62,6 +69,22 @@ public static class ProcessUtil
     }
 
     /// <summary>
+    /// Removes the MSBuild variables that a parent <c>dotnet</c> CLI process (like <c>dotnet run</c>,
+    /// <c>dotnet watch</c> or <c>dotnet test</c>) sets to point at its own SDK. A child <c>dotnet</c>
+    /// process that inherits them loads that SDK's targets instead of the SDK its <c>global.json</c>
+    /// selects, which fails when the parent SDK is newer than the runtime the child's MSBuild runs on.
+    /// </summary>
+    public static ProcessStartInfo RemoveInheritedMSBuildSdkVariables(this ProcessStartInfo processStartInfo)
+    {
+        foreach (var name in _sdkPinningMSBuildVariables)
+        {
+            processStartInfo.Environment.Remove(name);
+        }
+
+        return processStartInfo;
+    }
+
+    /// <summary>
     /// Grants execute permission to the specified file on Unix-based systems.
     /// </summary>
     /// <param name="filePath">The full path to the file to be made executable.</param>
@@ -83,7 +106,17 @@ public static class ProcessUtil
                 return true;
             }
 
-            using var p = Process.Start("chmod", $"+x \"{filePath}\"");
+            using var p = Process.Start(new ProcessStartInfo("chmod")
+            {
+                ArgumentList = { "+x", filePath },
+                UseShellExecute = false
+            });
+
+            if (p == null)
+            {
+                return false;
+            }
+
             p.WaitForExit();
             return p.ExitCode == 0;
         }

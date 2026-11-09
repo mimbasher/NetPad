@@ -1,4 +1,4 @@
-﻿using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp;
 using NetPad.DotNet;
 
 namespace NetPad.Runtime.Tests.DotNet;
@@ -20,20 +20,6 @@ public class DotNetFrameworkVersionUtilTests
 
         Assert.Equal(expectedSupported, DotNetFrameworkVersionUtil.IsSdkVersionSupported(semanticVersion));
         Assert.Equal(expectedSupported, DotNetFrameworkVersionUtil.IsSupported(sdkVersion));
-    }
-
-    [Theory]
-    [InlineData("3.1.0", false)]
-    [InlineData("5.0.0", true)]
-    [InlineData("6.0.0", true)]
-    [InlineData("8.0.0", true)]
-    public void Determines_Supported_EfCoreTool_Version_Correctly(string version, bool expectedSupported)
-    {
-        var semanticVersion = new SemanticVersion(version);
-
-        var supported = DotNetFrameworkVersionUtil.IsEfToolVersionSupported(semanticVersion);
-
-        Assert.Equal(expectedSupported, supported);
     }
 
     [Theory]

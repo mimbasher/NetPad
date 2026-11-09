@@ -18,23 +18,15 @@ export class ViewerHostCollection {
             throw new Error(`A ${nameof(ViewerHost)} with ID '${viewerHost.id}' already exists`);
         }
 
-        viewerHost.order = this._items.length;
+        const position = this._items.length;
+        viewerHost.order = position;
+        viewerHost.name = position === 0 ? "main" : `split-${position}`;
         this._items.push(viewerHost);
     }
 
     public async activate(viewerHost: ViewerHost | null) {
         this._active = viewerHost;
-        await this.active?.activeViewable?.activate(this.active);
-    }
-
-    public activateViewable(viewable: ViewableObject) {
-        const host = this._items.find(vh => vh.viewables.has(viewable));
-
-        if (!host) {
-            throw new Error("No viewer host has this viewable open");
-        }
-
-        host.activate(viewable);
+        await viewerHost?.activeViewable?.activate(viewerHost);
     }
 
     public findViewable(viewableId: string): { viewable: ViewableObject, host: ViewerHost } | undefined {

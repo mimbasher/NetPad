@@ -2,34 +2,44 @@ import {Constructable} from "aurelia";
 import {DialogCloseResult, IDialogService} from "@aurelia/dialog";
 import {Dialog} from "./dialog";
 import {OpenDialogs} from "./open-dialogs";
-import {IPromptDialogModel, PromptDialog} from "../app/prompt-dialog/prompt-dialog";
-import {AskDialog, IAskDialogModel} from "../app/ask-dialog/ask-dialog";
-import {AlertDialog, IAlertDialogModel} from "../app/alert-dialog/alert-dialog";
+import {IPromptDialogModel, PromptDialog} from "./prompt-dialog/prompt-dialog";
+import {AskDialog, IAskDialogModel} from "./ask-dialog/ask-dialog";
+import {AlertDialog, IAlertDialogModel} from "./alert-dialog/alert-dialog";
 
 export class DialogUtil {
     constructor(@IDialogService private readonly dialogService: IDialogService) {
     }
 
+    /**
+     * Shows a popup with a message and a button for the user to close the alert.
+     */
     public async alert(options: IAlertDialogModel): Promise<DialogCloseResult> {
         const openResult = await this.open(AlertDialog, options);
 
         if (!openResult) {
-            throw new Error("Error opening alert with message: " + options.message)
+            throw new Error("Error opening alert with message: " + (options.message ?? options.messageHtml))
         }
 
         return openResult;
     }
 
+    /**
+     * Shows a popup asking the user a question. Multiple buttons are available for the user to select an option.
+     */
     public async ask(options: IAskDialogModel): Promise<DialogCloseResult> {
         const openResult = await this.open(AskDialog, options);
 
         if (!openResult) {
-            throw new Error("Error opening ask with message: " + options.message)
+            throw new Error("Error opening ask with message: " + (options.message ?? options.messageHtml))
         }
 
         return openResult;
     }
 
+    /**
+     * Shows a popup asking the user to input text.
+     * @param options
+     */
     public async prompt(options: IPromptDialogModel): Promise<DialogCloseResult> {
         const openResult = await this.open(PromptDialog, options);
 
@@ -44,8 +54,6 @@ export class DialogUtil {
      * Opens a dialog (a class that extends Dialog<>).
      * @param dialogComponent The dialog type to open.
      * @param input Input object to be passed to dialog when activated.
-     * @param allowMultiple By default only one instance of a particular dialog type is opened, if this is true,
-     * multiple dialogs of this dialog type will be allowed to be opened simultaneously.
      */
     public async open<TDialog extends typeof Dialog<TInput> | Constructable, TInput>(
         dialogComponent: TDialog,
@@ -61,7 +69,9 @@ export class DialogUtil {
 
         openResult = await this.dialogService.open({
             component: () => dialogComponent,
-            model: input
+            model: input,
+            // Don't add Enter: each dialog decides whether it has a button safe to fire by default.
+            keyboard: ["Escape"]
         });
 
         OpenDialogs.set(key, openResult);

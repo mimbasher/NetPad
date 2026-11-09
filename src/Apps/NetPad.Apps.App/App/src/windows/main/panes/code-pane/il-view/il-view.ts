@@ -6,22 +6,16 @@ import {
     IEventBus,
     ISession,
     Pane,
+    ScriptCodeUpdatedEvent,
     ScriptConfigPropertyChangedEvent,
     ScriptPropertyChangedEvent,
     ViewModelBase
 } from "@application";
 import {Util} from "@common";
-import {ScriptCodeUpdatedEvent} from "@application/scripts/script-code-updated-event";
 import {ProblemDetails} from "@application/api-problem-details";
-import "highlight.js/styles/monokai.min.css";
 import hljs from "highlight.js/lib/common";
 import {observable} from "@aurelia/runtime";
 import {UiUtil} from "@common/utils/ui-util";
-
-interface ICacheItem {
-    il: string | null;
-    code: string;
-}
 
 export class IlView extends ViewModelBase {
     private current: string | null;
@@ -44,9 +38,18 @@ export class IlView extends ViewModelBase {
         this.addDisposable(token);
 
         this.loadIL();
-        this.addDisposable(this.eventBus.subscribe(ScriptCodeUpdatedEvent, () => this.loadIL()));
-        this.addDisposable(this.eventBus.subscribeToServer(ScriptPropertyChangedEvent, () => this.loadIL()));
-        this.addDisposable(this.eventBus.subscribeToServer(ScriptConfigPropertyChangedEvent, () => this.loadIL()));
+        this.addDisposable(this.eventBus.subscribe(ScriptCodeUpdatedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadIL();
+        }));
+        this.addDisposable(this.eventBus.subscribeToServer(ScriptCodeUpdatedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadIL();
+        }));
+        this.addDisposable(this.eventBus.subscribeToServer(ScriptPropertyChangedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadIL();
+        }));
+        this.addDisposable(this.eventBus.subscribeToServer(ScriptConfigPropertyChangedEvent, ev => {
+            if (ev.scriptId === this.session.active?.script.id) this.loadIL();
+        }));
     }
 
 
@@ -68,7 +71,7 @@ export class IlView extends ViewModelBase {
         this.loadIL();
     }
 
-    private loadIL = Util.debounce(this, async () => {
+    private loadIL = Util.debounceAsync(this, async () => {
             if (!this.pane.isOpen || !this.isActive) {
                 return;
             }
@@ -116,6 +119,14 @@ export class IlView extends ViewModelBase {
         500,
         true);
 
+    /**
+     * Renames the highlighter's `hljs-*` classes, so the highlight.js theme each app theme scopes (whose
+     * selectors would outrank this view's) does not color the IL.
+     */
+    private static toIlTokens(html: string) {
+        return html.replace(/class="hljs-/g, 'class="il-');
+    }
+
     private setCurrent(current: string | null) {
         if (!current) {
             this.current = current;
@@ -124,7 +135,7 @@ export class IlView extends ViewModelBase {
 
         // Defer rendering of syntax tree to not block UI
         setTimeout(() => {
-            this.current = hljs.highlightAuto(current).value;
+            this.current = IlView.toIlTokens(hljs.highlightAuto(current).value);
         }, 1);
     }
 }

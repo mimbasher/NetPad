@@ -2,26 +2,22 @@
 import {watch} from "@aurelia/runtime-html";
 import {
     EnvironmentPropertyChangedEvent,
-    HtmlErrorScriptOutput,
-    HtmlRawScriptOutput,
-    HtmlResultsScriptOutput,
-    HtmlSqlScriptOutput,
+    CommandIds,
     IEventBus,
     ISession,
-    IShortcutManager,
     IWindowService,
     KeyCombo,
     Pane,
+    PaneIds,
     PromptUserForInputCommand,
     ScriptEnvironment,
     ScriptOutputEmittedEvent,
     ScriptStatus,
-    Settings,
-    ShortcutIds
+    Settings
 } from "@application";
-import {AppWindows} from "@application/windows/app-windows";
+import {AppWindows} from "@application/windowing/app-windows";
 import {OutputModel} from "./output-model";
-import {DisposableCollection, KeyCode} from "@common";
+import {DisposableCollection} from "@common";
 import {FindTextBox} from "@application/find-text-box/find-text-box";
 
 export class OutputPane extends Pane {
@@ -33,11 +29,11 @@ export class OutputPane extends Pane {
     private tabs = [
         {
             name: "Results",
-            keyBinding: new KeyCombo().withAltKey().withKey(KeyCode.Digit1),
+            keyBinding: new KeyCombo({alt: true, key: "1"}),
         },
         {
             name: "SQL",
-            keyBinding: new KeyCombo().withAltKey().withKey(KeyCode.Digit2),
+            keyBinding: new KeyCombo({alt: true, key: "2"}),
         },
     ]
 
@@ -46,12 +42,11 @@ export class OutputPane extends Pane {
         @ISession public readonly session: ISession,
         @IWindowService private readonly windowService: IWindowService,
         @IEventBus private eventBus: IEventBus,
-        @IShortcutManager shortcutManager: IShortcutManager,
         private readonly appWindows: AppWindows,
         private readonly settings: Settings
     ) {
-        super("Output", "output-icon", false);
-        this.hasShortcut(shortcutManager.getShortcut(ShortcutIds.openOutput));
+        super(PaneIds.output, "Output", "output", false);
+        this.togglesWith(CommandIds.toggleOutputPane);
     }
 
     public bound() {
@@ -91,8 +86,7 @@ export class OutputPane extends Pane {
                             model.inputRequest = null;
                             model.resultsDumpContainer.clearOutput(true);
                             model.sqlDumpContainer.clearOutput(true);
-                        }
-                        else {
+                        } else {
                             model.inputRequest = null;
                         }
                     }
@@ -114,12 +108,12 @@ export class OutputPane extends Pane {
                     return;
                 }
 
-                if ([nameof(HtmlResultsScriptOutput), nameof(HtmlErrorScriptOutput), nameof(HtmlRawScriptOutput)].indexOf(msg.outputType) >= 0) {
+                if (msg.output.kind === "Result" || msg.output.kind === "Error") {
                     model.resultsDumpContainer.appendOutput(msg.output);
-                } else if (msg.outputType === nameof(HtmlSqlScriptOutput)) {
+                } else if (msg.output.kind === "Sql") {
                     model.sqlDumpContainer.appendOutput(msg.output);
                 } else {
-                    this.logger.warn(`Got output for script ${msg.scriptId} but message type ${msg.outputType} is unhandled. Message: `, msg);
+                    this.logger.warn(`Got output for script ${msg.scriptId} but message type ${msg.output.kind} is unhandled. Message: `, msg);
                 }
             })
         );
@@ -133,7 +127,7 @@ export class OutputPane extends Pane {
                 }
 
                 model.inputRequest = {
-                    commandId: msg.id
+                    commandId: msg.requestId
                 };
 
                 setTimeout(() => {
@@ -167,7 +161,7 @@ export class OutputPane extends Pane {
 
             this.findTextBox.registerSearchableElement(
                 this.current.sqlDumpContainer.element,
-                ".text, .sql-keyword, .query-time, .query-params, .logger-name, .not-special");
+                ".group.text");
 
             this.setFindTextBoxSearchableElement();
         }

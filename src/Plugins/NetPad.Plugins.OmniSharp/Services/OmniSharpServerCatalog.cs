@@ -10,11 +10,10 @@ namespace NetPad.Plugins.OmniSharp.Services;
 /// Manages and keeps a collection of created OmniSharp servers.
 /// </summary>
 public class OmniSharpServerCatalog(
-    IServiceProvider serviceProvider,
+    IServiceScopeFactory serviceScopeFactory,
     IAppStatusMessagePublisher appStatusMessagePublisher,
     ILogger<OmniSharpServerCatalog> logger)
 {
-    private readonly IServiceScope _serviceScope = serviceProvider.CreateScope();
     private readonly ConcurrentDictionary<Guid, CatalogItem> _items = new();
 
     public bool HasOmniSharpServer(Guid scriptId)
@@ -46,12 +45,12 @@ public class OmniSharpServerCatalog(
             nameof(AppOmniSharpServer),
             environment.Script);
 
-        _ = appStatusMessagePublisher.PublishAsync(environment.Script.Id, "Starting OmniSharp server...");
+        _ = appStatusMessagePublisher.PublishTransientAsync(environment.Script.Id, "Starting OmniSharp server...");
 
         var catalogItem = _items.GetOrAdd(
             environment.Script.Id,
-            static (id, ctx) => CreateCatalogItem(ctx.Item1, ctx.Item2, ctx.Item3),
-            (_serviceScope.ServiceProvider.CreateScope(), environment, logger)
+            static (id, ctx) => CreateCatalogItem(ctx.serviceScopeFactory.CreateScope(), ctx.environment, ctx.logger),
+            (serviceScopeFactory, environment, logger)
         );
 
         logger.LogDebug("Added OmniSharp server for script {Script}", environment.Script);
@@ -64,14 +63,17 @@ public class OmniSharpServerCatalog(
             {
                 _items.TryRemove(environment.Script.Id, out _);
 
-                await appStatusMessagePublisher.PublishAsync(
+                await appStatusMessagePublisher.PublishAlertAsync(
                     environment.Script.Id,
                     "OmniSharp server failed to start. Check log file for details.",
-                    AppStatusMessagePriority.High);
+                    AppStatusMessageSeverity.Error);
             }
             else if (t.IsCompletedSuccessfully)
             {
-                await appStatusMessagePublisher.PublishAsync(environment.Script.Id, "OmniSharp server started");
+                await appStatusMessagePublisher.PublishTransientAsync(
+                    environment.Script.Id,
+                    "OmniSharp server started",
+                    AppStatusMessageSeverity.Success);
             }
         }, TaskContinuationOptions.ExecuteSynchronously);
 

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using NetPad.Apps.CQs;
 using NetPad.Apps.UiInterop;
 
@@ -19,7 +19,7 @@ public class TransactionQueueTests
         Assert.False(promise.Task.IsCompleted);
 
         using var doc1 = JsonDocument.Parse("\"Hello world\"");
-        IpcResponseQueue.ResponseReceived(message.Id, doc1.RootElement);
+        IpcResponseQueue.ResponseReceived(message.RequestId, doc1.RootElement);
 
         Assert.True(promise.Task.IsCompletedSuccessfully);
     }
@@ -35,7 +35,7 @@ public class TransactionQueueTests
         Assert.False(promise.Task.IsCompleted);
 
         using var doc2 = JsonDocument.Parse("\"Hello world\"");
-        IpcResponseQueue.ResponseReceived(message.Id, doc2.RootElement);
+        IpcResponseQueue.ResponseReceived(message.RequestId, doc2.RootElement);
 
         Assert.Equal("Hello world", await promise.Task);
     }

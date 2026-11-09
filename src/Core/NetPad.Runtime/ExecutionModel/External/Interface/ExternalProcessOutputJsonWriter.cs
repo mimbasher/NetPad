@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Data;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -12,14 +13,14 @@ namespace NetPad.ExecutionModel.External.Interface;
 /// Converts output emitted by the script (ex. using Dump() or Console.Write)
 /// to NDJSON (newline-delimited JSON) and writes it to the main output.
 /// </summary>
-internal class ExternalProcessOutputJsonWriter(Func<string, Task> writeToMainOut, bool includeSql)
+internal class ExternalProcessOutputJsonWriter(Func<string, Task> writeToMainOut, bool dumpRawJson, bool includeSql)
     : IExternalProcessOutputWriter
 {
     private static readonly Lazy<Regex> _ansiColorsRegex = new(() => new Regex(@"\x1B\[[^@-~]*[@-~]"));
     private uint _resultOutputCounter;
     private uint _sqlOutputCounter;
 
-    private static readonly JsonSerializerOptions _valueOptions = new()
+    private static readonly JsonSerializerOptions _serializerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter() },
@@ -36,8 +37,16 @@ internal class ExternalProcessOutputJsonWriter(Func<string, Task> writeToMainOut
             output = _ansiColorsRegex.Value.Replace(str, string.Empty);
         }
 
-        var line = SerializeLine("result", order, options?.Title, output);
-        await writeToMainOut(line);
+        if (dumpRawJson)
+        {
+            await writeToMainOut(SerializeLine("result", order, options?.Title, output));
+        }
+        else
+        {
+            var valueJson = SerializeValue(output);
+            var scriptOutput = new ScriptOutput(ScriptOutputKind.Result, order, valueJson, ScriptOutputFormat.Json);
+            await writeToMainOut(NetPad.Common.JsonSerializer.Serialize(scriptOutput));
+        }
     }
 
     public async Task WriteSqlAsync(object? output, DumpOptions? options = null)
@@ -48,31 +57,63 @@ internal class ExternalProcessOutputJsonWriter(Func<string, Task> writeToMainOut
         }
 
         uint order = Interlocked.Increment(ref _sqlOutputCounter);
-        var line = SerializeLine("sql", order, title: null, output);
-        await writeToMainOut(line);
+
+        if (dumpRawJson)
+        {
+            await writeToMainOut(SerializeLine("sql", order, title: null, output));
+        }
+        else
+        {
+            var valueJson = SerializeValue(output);
+            var scriptOutput = new ScriptOutput(ScriptOutputKind.Sql, order, valueJson, ScriptOutputFormat.Json);
+            await writeToMainOut(NetPad.Common.JsonSerializer.Serialize(scriptOutput));
+        }
     }
 
-    private static string SerializeLine(string type, uint order, string? title, object? value)
+    private static string SerializeValue(object? value)
     {
-        // Materialize IQueryable (e.g. EF Core queries) to a concrete list before serialization.
+        // Materialize IQueryable to a concrete list before serialization.
         // IQueryable types can't be serialized directly by System.Text.Json.
         if (value is IQueryable)
         {
             var list = new List<object?>();
             foreach (var item in (IEnumerable)value)
+            {
                 list.Add(item);
+            }
+
             value = list;
         }
 
-        string valueJson;
+        // DataTable/DataSet can't be serialized by System.Text.Json, convert to list of dictionaries.
+        if (value is DataSet dataSet)
+        {
+            var tables = new Dictionary<string, object>(dataSet.Tables.Count);
+            foreach (DataTable t in dataSet.Tables)
+            {
+                tables[t.TableName] = ConvertDataTable(t);
+            }
+
+            value = tables;
+        }
+        else if (value is DataTable dataTable)
+        {
+            value = ConvertDataTable(dataTable);
+        }
+
         try
         {
-            valueJson = JsonSerializer.Serialize(value, _valueOptions);
+            return JsonSerializer.Serialize(value, _serializerOptions);
         }
         catch
         {
-            valueJson = JsonSerializer.Serialize(value?.ToString());
+            return JsonSerializer.Serialize(value?.ToString());
         }
+    }
+
+    private static string SerializeLine(string type, uint order, string? title, object? value)
+    {
+        var valueJson = SerializeValue(value);
 
         var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
@@ -80,13 +121,36 @@ internal class ExternalProcessOutputJsonWriter(Func<string, Task> writeToMainOut
             writer.WriteStartObject();
             writer.WriteString("type", type);
             writer.WriteNumber("order", order);
+
             if (title != null)
+            {
                 writer.WriteString("title", title);
+            }
+
             writer.WritePropertyName("value");
             writer.WriteRawValue(valueJson);
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static List<Dictionary<string, object?>> ConvertDataTable(DataTable dataTable)
+    {
+        var columns = dataTable.Columns.Cast<DataColumn>().ToArray();
+        var rows = new List<Dictionary<string, object?>>(dataTable.Rows.Count);
+
+        foreach (DataRow row in dataTable.Rows)
+        {
+            var dict = new Dictionary<string, object?>(columns.Length);
+            foreach (var col in columns)
+            {
+                dict[col.ColumnName] = row[col] is DBNull ? null : row[col];
+            }
+
+            rows.Add(dict);
+        }
+
+        return rows;
     }
 }

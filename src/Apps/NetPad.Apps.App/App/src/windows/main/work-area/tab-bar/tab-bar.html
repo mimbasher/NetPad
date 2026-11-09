@@ -1,55 +1,40 @@
 <div class="drag-drop-container" ref="tabContainer">
-    <div class="view-tab ${viewable.id === active.id ? 'active' : ''} ${'status-' + viewable.environment.status.toLowerCase()}"
+    <div class="view-tab ${viewable.id === active.id ? 'active' : ''} ${viewable.statusIndicator ? 'status-' + viewable.statusIndicator : ''}"
          repeat.for="viewable of orderedViewables"
          data-id.bind="viewable.id"
          data-name.bind="viewable.name"
-         title.bind="viewable.environment.script.path || (viewable.isDirty ? 'Unsaved' : '')">
+         title.bind="viewable.tooltip">
         <div class="view-tab-content"
              click.trigger="activate(viewable)"
              auxclick.trigger="close(viewable, $event)">
 
-            <div class="script-name">
-                <img src.bind="viewable.environment.script.config.kind | langLogo"
-                     alt=""
-                     style="max-height: 1rem" class="me-3"/>
-                ${viewable.name}
-                <small
-                    class="database-icon ms-3 ${viewable.environment.script.dataConnection.containsProductionData ? 'is-production' : ''}"
-                    show.bind="viewable.environment.script.dataConnection"
-                    title="${viewable.environment.script.dataConnection.name} ${viewable.environment.script.dataConnection.containsProductionData ? '(Production)' : ''}"></small>
-            </div>
+            <span class="state-dot ${viewable.statusIndicator || ''}"
+                  if.bind="settings.appearance.showScriptRunStatusIndicatorInTab"
+                  title.bind="statusTitle(viewable)"></span>
 
-            <div class="script-status"
-                 if.bind="settings.appearance.showScriptRunStatusIndicatorInTab"
-                 switch.bind="viewable.environment.status">
-                <spinner case="Running"
-                         class="script-running-indicator"
-                         title="Running..."></spinner>
-                <spinner case="Stopping"
-                         class="script-stopping-indicator"
-                         title="Stopping..."></spinner>
-                <i case="Ready" if.bind="viewable.environment.runDurationMilliseconds != null"
-                   class="script-status-success-icon icon-xs"
-                   title="Script ran successfully"></i>
-                <i case="Error"
-                   class="script-status-error-icon icon-xs"
-                   title="Error occurred"></i>
+            <div class="script-name">
+                <span if.bind="viewable.kindBadge"
+                      class="kind-badge">${viewable.kindBadge}</span>
+                ${viewable.name}
+                <np-icon if.bind="viewable.subtitleIcon"
+                         name.bind="viewable.subtitleIcon"
+                         class="connection-glyph ${viewable.hasProductionWarning ? 'production' : ''}"
+                         title="${viewable.subtitle}"></np-icon>
             </div>
         </div>
-        <div class="view-tab-addon ${viewable.isDirty ? 'is-dirty' : ''}">
-            <i class="dirty-flag script-status-dirty-icon icon-xs"
-               title="Error occurred"></i>
-            <i class="view-tab-close-button close-icon action-icon"
-               title="${shortcutManager.getShortcutByName('Close').toString()}"
-               click.trigger="close(viewable)"></i>
+        <div class="view-tab-addon ${viewable.isDirty ? 'dirty' : ''}">
+            <span class="state-dot dirty dirty-flag" title="Unsaved changes"></span>
+            <np-icon name="close" class="view-tab-close-button"
+               title.bind="closeTooltip"
+               click.trigger="close(viewable)"></np-icon>
         </div>
     </div>
 </div>
 
 <div class="view-tab new-tab"
      click.trigger="new()"
-     title="${shortcutManager.getShortcutByName('New').toString()}">
-    <i class="add-script-icon icon-button"></i>
+     title.bind="newTooltip">
+    <np-icon name="add"></np-icon>
 </div>
 
 <context-menu options.bind="tabContextMenuOptions"></context-menu>

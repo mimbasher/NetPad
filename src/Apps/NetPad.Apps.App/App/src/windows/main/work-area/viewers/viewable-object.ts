@@ -1,28 +1,20 @@
-﻿import {WithDisposables} from "@common";
+import {WithDisposables} from "@common";
+import {IconName, ScriptStatusIndicator} from "@application";
 import {ViewerHost} from "./viewer-host";
+import {DragAndDropBase} from "@application/dnd/drag-and-drop-base";
 
-export enum ViewableObjectType {
-    Text = "Text",
-    Media = "Media"
-}
-
-export interface IViewableObjectCommands
-{
-    open: (viewerHost: ViewerHost) => Promise<void>;
-    close: (viewerHost: ViewerHost) => Promise<void>;
-    activate: (viewerHost: ViewerHost) => Promise<void>;
-    rename: () => Promise<void>;
-    duplicate: () => Promise<void>;
-    save: () => Promise<boolean>;
-    openContainingFolder: () => Promise<void>;
-}
+export type ViewableStatusIndicator = ScriptStatusIndicator;
 
 export abstract class ViewableObject extends WithDisposables {
-    protected constructor(
-        public readonly id: string,
-        public readonly type: ViewableObjectType,
-        protected readonly commands: IViewableObjectCommands
-    ) {
+    public kindBadge?: string;
+    public tooltip?: string;
+    public subtitle?: string;
+    public subtitleIcon?: IconName;
+    public hasProductionWarning?: boolean;
+    public statusIndicator?: ViewableStatusIndicator;
+    public path?: string;
+
+    protected constructor(public readonly id: string) {
         super();
     }
 
@@ -31,34 +23,77 @@ export abstract class ViewableObject extends WithDisposables {
     abstract get isDirty(): boolean;
 
     public override toString() {
-        return `${this.type} [${this.id}] ${this.name}`;
+        return `${this.constructor.name} [${this.id}] ${this.name}`;
     }
 
-    public open(viewerHost: ViewerHost): Promise<void> {
-        return this.commands.open(viewerHost);
-    }
+    // Universal navigation operations.
+    public abstract open(viewerHost: ViewerHost): Promise<void>;
+    public abstract close(viewerHost: ViewerHost): Promise<void>;
+    public abstract activate(viewerHost: ViewerHost): Promise<void>;
 
-    public close(viewerHost: ViewerHost): Promise<void> {
-        return this.commands.close(viewerHost);
-    }
+    // Capability + action method pairs. Subclasses override only what they support.
 
-    public activate(viewerHost: ViewerHost): Promise<void> {
-        return this.commands.activate(viewerHost);
-    }
-
-    public rename(): Promise<void> {
-        return this.commands.rename();
-    }
-
-    public duplicate(): Promise<void> {
-        return this.commands.duplicate();
+    public canSave(): boolean {
+        return false;
     }
 
     public save(): Promise<boolean> {
-        return this.commands.save();
+        return Promise.resolve(false);
+    }
+
+    public canRename(): boolean {
+        return false;
+    }
+
+    public rename(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    public canDuplicate(): boolean {
+        return false;
+    }
+
+    public duplicate(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    public canOpenContainingFolder(): boolean {
+        return false;
     }
 
     public openContainingFolder(): Promise<void> {
-        return this.commands.openContainingFolder();
+        return Promise.resolve();
+    }
+
+    public canRun(): boolean {
+        return false;
+    }
+
+    public run(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    public canStop(): boolean {
+        return false;
+    }
+
+    public stop(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    public canOpenProperties(): boolean {
+        return false;
+    }
+
+    public openProperties(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    public canHandleDrop(_dnd: DragAndDropBase | null | undefined): boolean {
+        return false;
+    }
+
+    public handleDrop(_dnd: DragAndDropBase): Promise<void> {
+        return Promise.resolve();
     }
 }

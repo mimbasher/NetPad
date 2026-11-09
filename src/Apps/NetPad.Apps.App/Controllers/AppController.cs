@@ -1,6 +1,4 @@
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using MediatR;
@@ -11,7 +9,6 @@ using NetPad.Apps.CQs;
 using NetPad.Apps.UiInterop;
 using NetPad.Configuration;
 using NetPad.DotNet;
-using NetPad.Host.Filters;
 using NetPad.Scripts;
 
 namespace NetPad.Controllers;
@@ -26,13 +23,19 @@ public class AppController(ILogger<AppController> logger) : ControllerBase
         return appIdentifier;
     }
 
+    [HttpGet("info")]
+    public async Task<AppInfo> GetAppInfo([FromServices] IMediator mediator) =>
+        await mediator.Send(new GetAppInfoQuery());
+
     [HttpGet("latest-version")]
     public async Task<string?> GetLatestVersion(
-        [FromServices] HttpClient httpClient,
+        [FromServices] IHttpClientFactory httpClientFactory,
         [FromServices] AppIdentifier appIdentifier)
     {
         try
         {
+            var httpClient = httpClientFactory.CreateClient();
+
             var includePreRelease = SemanticVersion.TryParse(appIdentifier.ProductVersion, out var currentVersion)
                                     && currentVersion.IsPrerelease;
 
@@ -200,50 +203,5 @@ public class AppController(ILogger<AppController> logger) : ControllerBase
     public DotNetPathReport GetDotNetPathReport([FromServices] Settings settings)
     {
         return new DotNetPathResolver().FindDotNetInstallDir(settings);
-    }
-
-    [HttpPost("log/{source}")]
-    [SilentResponse]
-    public void SendRemoteLog(
-        LogSource source,
-        [FromBody] RemoteLogMessage[] logs,
-        [FromServices] ILoggerFactory loggerFactory)
-    {
-        var loggers = new Dictionary<string, ILogger>();
-
-        foreach (var log in logs.OrderBy(l => l.Date))
-        {
-            var message = log.Message ?? string.Empty;
-
-            foreach (var logOptionalParam in log.OptionalParams ??= [])
-            {
-                message += $" {logOptionalParam}";
-            }
-
-            var loggerName = $"RemoteLog.{source}.{log.Logger ?? "unknown-logger"}";
-
-            if (!loggers.TryGetValue(loggerName, out var logger))
-            {
-                logger = loggerFactory.CreateLogger(loggerName);
-                loggers.Add(loggerName, logger);
-            }
-
-            logger.Log(log.LogLevel, message);
-        }
-    }
-
-    public enum LogSource
-    {
-        WebApp = 10,
-        ElectronApp = 11
-    }
-
-    public class RemoteLogMessage
-    {
-        public string? Logger { get; set; }
-        public LogLevel LogLevel { get; set; }
-        public string? Message { get; set; }
-        public string?[]? OptionalParams { get; set; }
-        public DateTime Date { get; set; }
     }
 }

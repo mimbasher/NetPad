@@ -28,7 +28,7 @@ namespace NetPad.Runtime.Tests.ExecutionModel.ClientServer;
 
 public class ClientServerScriptRunnerTests : IDisposable
 {
-    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan _testTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Script _script;
     private readonly Mock<IScriptDependencyResolver> _depResolver;
@@ -58,11 +58,10 @@ public class ClientServerScriptRunnerTests : IDisposable
 
         _statusPublisher = new Mock<IAppStatusMessagePublisher>();
         _statusPublisher
-            .Setup(p => p.PublishAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<string>(),
-                It.IsAny<AppStatusMessagePriority>(),
-                It.IsAny<bool>()))
+            .Setup(p => p.PublishTransientAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<AppStatusMessageSeverity>()))
+            .Returns(Task.CompletedTask);
+        _statusPublisher
+            .Setup(p => p.PublishNoticeAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<AppStatusMessageSeverity>()))
             .Returns(Task.CompletedTask);
 
         _dotNetInfo = new Mock<IDotNetInfo>();
@@ -116,7 +115,7 @@ public class ClientServerScriptRunnerTests : IDisposable
     /// </summary>
     private async Task WaitForRunScriptCalled()
     {
-        await _runScriptCalled.Task.WaitAsync(TestTimeout);
+        await _runScriptCalled.Task.WaitAsync(_testTimeout);
         _runScriptCalled = new TaskCompletionSource();
     }
 
@@ -212,7 +211,7 @@ public class ClientServerScriptRunnerTests : IDisposable
 
         await runner.RunScriptAsync(new RunOptions());
 
-        Assert.Contains(_outputCapture.Writes, o => o is ErrorScriptOutput);
+        Assert.Contains(_outputCapture.Writes, o => o is ScriptOutput { Kind: ScriptOutputKind.Error });
     }
 
     #endregion
@@ -295,7 +294,7 @@ public class ClientServerScriptRunnerTests : IDisposable
         // Reset mock to track calls from second run only
         _processManager.Invocations.Clear();
 
-        // Second run — should restart because user requested stop
+        // Second run: should restart because user requested stop
         _ = runner.RunScriptAsync(new RunOptions());
         await WaitForRunScriptCalled();
 
@@ -345,13 +344,13 @@ public class ClientServerScriptRunnerTests : IDisposable
         // First run, then stop
         await RunAndStop(runner);
 
-        // Publish event — simulates data connection resources changing
+        // Publish event that simulates data connection resources changing
         await _eventBus.PublishAsync(
             new DataConnectionResourcesUpdatingEvent(dataConnection, DotNetFrameworkVersion.DotNet9));
 
         _compiler.Invocations.Clear();
 
-        // Second run — should recompile (cache was invalidated)
+        // Second run: should recompile (cache was invalidated)
         _ = runner.RunScriptAsync(new RunOptions());
         await WaitForRunScriptCalled();
 
@@ -368,12 +367,12 @@ public class ClientServerScriptRunnerTests : IDisposable
         SetupCompilationSuccess();
         using var runner = CreateRunner();
 
-        // First run — compiles
+        // First run: compiles
         await RunAndStop(runner);
 
         _compiler.Invocations.Clear();
 
-        // Second run with same code — should use cache
+        // Second run with same code: should use cache
         _ = runner.RunScriptAsync(new RunOptions());
         await WaitForRunScriptCalled();
 
@@ -421,7 +420,7 @@ public class ClientServerScriptRunnerTests : IDisposable
             CallBase = true
         };
         mock.Setup(x => x.TestConnectionAsync(It.IsAny<IDataConnectionPasswordProtector>()))
-            .ReturnsAsync(new DataConnectionTestResult(true));
+            .ReturnsAsync(DataConnectionTestResult.Succeeded(null));
         return mock.Object;
     }
 

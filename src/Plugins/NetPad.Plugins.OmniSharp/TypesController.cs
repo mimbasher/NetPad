@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using NetPad.Plugins.OmniSharp.Events;
 
 namespace NetPad.Plugins.OmniSharp;
@@ -19,5 +19,6 @@ public class TypesController : Controller
     {
         public OmniSharpDiagnosticsEvent? OmniSharpDiagnosticsEvent { get; set; }
         public OmniSharpAsyncBufferUpdateCompletedEvent? OmniSharpAsyncBufferUpdateCompletedEvent { get; set; }
+        public OmniSharpServerReadyEvent? OmniSharpServerReadyEvent { get; set; }
     }
 }

@@ -1,5 +1,6 @@
 using NetPad.Compilation;
 using NetPad.DotNet.CodeAnalysis;
+using NetPad.Exceptions;
 using NetPad.Scripts;
 
 namespace NetPad.ExecutionModel.InMemory;
@@ -54,7 +55,7 @@ public class InMemoryRunnerCSharpCodeParser : ICodeParser
 
         if (script.Config.Kind == ScriptKind.Expression)
         {
-            throw new NotImplementedException("Expression code parsing is not implemented yet.");
+            throw new UnsupportedScriptKindException(script.Config.Kind);
         }
 
         if (script.Config.Kind == ScriptKind.SQL)
@@ -132,17 +133,17 @@ catch (System.Exception ex)
 
     internal static void OutputWrite(object? o = null, string? title = null)
     {{{{
-        Output.WriteAsync(new RawScriptOutput(o), title);
+        Output.WriteAsync(new ScriptOutput(ScriptOutputKind.Result, o?.ToString()), title);
     }}}}
 
     internal static void OutputWriteLine(object? o = null, string? title = null)
     {{{{
-        Output.WriteAsync(new RawScriptOutput(o), title);
+        Output.WriteAsync(new ScriptOutput(ScriptOutputKind.Result, o?.ToString()), title);
     }}}}
 
     internal static void SqlWrite(object? o, string? title = null)
     {{{{
-        {{0}}.Output.WriteAsync(new SqlScriptOutput(o?.ToString()), title);
+        {{0}}.Output.WriteAsync(new ScriptOutput(ScriptOutputKind.Sql, o?.ToString()), title);
     }}}}
 }}}}
 

@@ -1,7 +1,6 @@
 import {IHttpClient} from "@aurelia/fetch-client";
-import {ApiException, IEventBus, IScriptService, Script, ScriptsApiClient} from "@application";
+import {ApiException, errorMessageOf, IEventBus, IScriptService, Script, ScriptCodeUpdatedEvent, ScriptsApiClient} from "@application";
 import {ScriptCodeUpdatingEvent} from "@application/scripts/script-code-updating-event";
-import {ScriptCodeUpdatedEvent} from "@application/scripts/script-code-updated-event";
 import {DialogUtil} from "@application/dialogs/dialog-util";
 
 export class ScriptService extends ScriptsApiClient implements IScriptService {
@@ -13,19 +12,24 @@ export class ScriptService extends ScriptsApiClient implements IScriptService {
         super(baseUrl, http);
     }
 
-    public override async updateCode(id: string, code: string, signal?: AbortSignal | undefined): Promise<void> {
+    public override async updateCode(id: string, code: string, externallyInitiated?: boolean, signal?: AbortSignal | undefined): Promise<void> {
         this.eventBus.publish(new ScriptCodeUpdatingEvent(id, code));
 
         try {
-            return await super.updateCode(id, code, signal);
+            return await super.updateCode(id, code, externallyInitiated, signal);
         } finally {
-            this.eventBus.publish(new ScriptCodeUpdatedEvent(id, code));
+            this.eventBus.publish(new ScriptCodeUpdatedEvent({
+                scriptId: id,
+                newCode: code,
+                externallyInitiated: false
+            }));
         }
     }
 
-    public async openRenamePrompt(script: Script): Promise<void> {
+    public async openRenamePrompt(script: { id: string; name: string }): Promise<void> {
         const prompt = await this.dialogUtil.prompt({
-            message: "New name:",
+            title: "Rename",
+            message: "New name",
             defaultValue: script.name,
             placeholder: "Script name"
         });
@@ -36,9 +40,12 @@ export class ScriptService extends ScriptsApiClient implements IScriptService {
         }
 
         super.rename(script.id, newName)
-            .catch(err => {
+            .catch(async err => {
                 if (err instanceof ApiException) {
-                    alert(err.errorResponse?.message || "An error occurred during rename.");
+                    await this.dialogUtil.alert({
+                        title: "Couldn't Rename Script",
+                        message: errorMessageOf(err, "An error occurred during rename."),
+                    });
                 }
             });
     }

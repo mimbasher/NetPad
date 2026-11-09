@@ -98,9 +98,12 @@ export class MainMenuManager {
                 label: 'File',
                 submenu: [
                     this.fromAppMenuItem("file.new"),
+                    this.fromAppMenuItem("file.open"),
+                    this.fromAppMenuItem("file.openRecent"),
                     this.fromAppMenuItem("file.goToScript"),
                     {type: "separator"},
                     this.fromAppMenuItem("file.save"),
+                    this.fromAppMenuItem("file.saveAs"),
                     this.fromAppMenuItem("file.saveAll"),
                     this.fromAppMenuItem("file.properties"),
                     this.fromAppMenuItem("file.close"),
@@ -143,12 +146,12 @@ export class MainMenuManager {
                     this.fromAppMenuItem("edit.find"),
                     this.fromAppMenuItem("edit.replace"),
                     {type: "separator"},
-                    this.fromAppMenuItem("edit.transform1"),
-                    this.fromAppMenuItem("edit.transform2"),
-                    this.fromAppMenuItem("edit.transform3"),
-                    this.fromAppMenuItem("edit.transform4"),
-                    this.fromAppMenuItem("edit.transform5"),
-                    this.fromAppMenuItem("edit.transform6"),
+                    this.fromAppMenuItem("edit.transformToUpperOrLowerCase"),
+                    this.fromAppMenuItem("edit.transformToUpperCase"),
+                    this.fromAppMenuItem("edit.transformToLowerCase"),
+                    this.fromAppMenuItem("edit.transformToTitleCase"),
+                    this.fromAppMenuItem("edit.transformToKebabCase"),
+                    this.fromAppMenuItem("edit.transformToSnakeCase"),
                     {type: "separator"},
                     this.fromAppMenuItem("edit.toggleLineComment"),
                     this.fromAppMenuItem("edit.toggleBlockComment"),
@@ -210,10 +213,19 @@ export class MainMenuManager {
             return {type: "separator"};
         }
 
+        if (appMenuItem.menuItems) {
+            return <MenuItemConstructorOptions>{
+                id: id,
+                label: appMenuItem.text,
+                enabled: !appMenuItem.disabled,
+                submenu: this.buildSubmenu(appMenuItem.menuItems)
+            };
+        }
+
         return <MenuItemConstructorOptions>{
             id: id,
             label: appMenuItem.text,
-            accelerator: this.getAccelerator(appMenuItem),
+            accelerator: appMenuItem.accelerator,
             click: async (menuItem, browserWindow) => {
                 if (browserWindow instanceof BrowserWindow) {
                     await this.sendMenuItemToRenderer(menuItem.id, browserWindow);
@@ -222,33 +234,34 @@ export class MainMenuManager {
         };
     }
 
-    private static async sendMenuItemToRenderer(menuItemId: string, browserWindow: Electron.BrowserWindow) {
-        browserWindow.webContents.send(ClickMenuItemCommand.name, new ClickMenuItemCommand(menuItemId));
-    }
-
-    private static getAccelerator(menuItem: IAppMenuItem): string | undefined {
-        if (menuItem.shortcut) {
-            const combo = [...menuItem.shortcut.keyCombo];
-            const accelerator: string[] = [];
-
-            for (const part of combo) {
-                const lower = part.toLowerCase();
-                if (lower === "meta") {
-                    accelerator.push("Meta");
-                } else if (lower === "alt") {
-                    accelerator.push("Alt");
-                } else if (lower === "ctrl") {
-                    accelerator.push("CmdOrCtrl");
-                } else if (lower === "shift") {
-                    accelerator.push("Shift");
-                } else {
-                    accelerator.push(part);
-                }
+    private static buildSubmenu(items: IAppMenuItem[]): MenuItemConstructorOptions[] {
+        return items.map(item => {
+            if (item.isDivider) {
+                return {type: "separator"};
             }
 
-            return accelerator.join("+");
-        }
+            if (item.menuItems) {
+                return <MenuItemConstructorOptions>{
+                    id: item.id,
+                    label: item.text,
+                    submenu: this.buildSubmenu(item.menuItems)
+                };
+            }
 
-        return menuItem.helpText?.replaceAll(" ", "");
+            return <MenuItemConstructorOptions>{
+                id: item.id,
+                label: item.text,
+                accelerator: item.accelerator,
+                click: async (menuItem, browserWindow) => {
+                    if (browserWindow instanceof BrowserWindow) {
+                        await this.sendMenuItemToRenderer(menuItem.id, browserWindow);
+                    }
+                }
+            };
+        });
+    }
+
+    private static async sendMenuItemToRenderer(menuItemId: string, browserWindow: Electron.BrowserWindow) {
+        browserWindow.webContents.send(ClickMenuItemCommand.name, new ClickMenuItemCommand(menuItemId));
     }
 }

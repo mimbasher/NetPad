@@ -15,12 +15,19 @@ public class ExternalProcessDumpSink : IDumpSink
     private static IExternalProcessOutputWriter? _output;
     private static bool _isHtmlOutput;
     private static readonly Lazy<ExternalProcessDumpSink> _instance = new(() => new ExternalProcessDumpSink());
+    private static readonly object _drainLock = new();
+    private static readonly List<Task> _pendingWrites = [];
 
     static ExternalProcessDumpSink()
     {
         // Capture default IO
         _defaultConsoleInput = Console.In;
         _defaultConsoleOutput = Console.Out;
+
+        // Drain pending async writes before process exit to prevent output loss.
+        // Writes are fire-and-forget during execution (to keep user code fast),
+        // but must complete before the process terminates.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Drain();
     }
 
     private ExternalProcessDumpSink()
@@ -45,7 +52,7 @@ public class ExternalProcessDumpSink : IDumpSink
             dumpRawHtml);
     }
 
-    public void UseJsonOutput(bool includeSql)
+    public void UseJsonOutput(bool dumpRawJson, bool includeSql)
     {
         Console.SetIn(new ActionTextReader(() =>
         {
@@ -57,7 +64,7 @@ public class ExternalProcessDumpSink : IDumpSink
 
         _isHtmlOutput = false;
         _output = new ExternalProcessOutputJsonWriter(
-            async str => await _defaultConsoleOutput.WriteLineAsync(str), includeSql);
+            async str => await _defaultConsoleOutput.WriteLineAsync(str), dumpRawJson, includeSql);
     }
 
     public void UseConsoleOutput(bool plainText, bool minimal)
@@ -94,11 +101,43 @@ public class ExternalProcessDumpSink : IDumpSink
             }
         }
 
-        _ = _output?.WriteResultAsync(o, options);
+        TrackWrite(_output?.WriteResultAsync(o, options));
     }
 
     public void SqlWrite<T>(T? o, DumpOptions? options = null)
     {
-        _ = _output?.WriteSqlAsync(o, options);
+        TrackWrite(_output?.WriteSqlAsync(o, options));
+    }
+
+    private static void TrackWrite(Task? task)
+    {
+        if (task == null || task.IsCompleted) return;
+        lock (_drainLock)
+        {
+            if (_pendingWrites.Count >= 1000)
+            {
+                _pendingWrites.RemoveAll(t => t.IsCompleted);
+            }
+
+            _pendingWrites.Add(task);
+        }
+    }
+
+    /// <summary>
+    /// Blocks until all pending async output writes have completed.
+    /// Called automatically on process exit to prevent output loss.
+    /// </summary>
+    public static void Drain()
+    {
+        lock (_drainLock)
+        {
+            if (_pendingWrites.Count > 0)
+            {
+                Task.WhenAll(_pendingWrites).GetAwaiter().GetResult();
+                _pendingWrites.Clear();
+            }
+        }
+
+        _defaultConsoleOutput.Flush();
     }
 }

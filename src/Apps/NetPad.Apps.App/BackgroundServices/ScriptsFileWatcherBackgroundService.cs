@@ -27,7 +27,7 @@ public class ScriptsFileWatcherBackgroundService : BackgroundService
 
         _pushDirectoryChanged = new Func<Task>(async () =>
         {
-            var scripts = await scriptRepository.GetAllAsync();
+            var scripts = await scriptRepository.GetSummariesAsync();
             await ipcService.SendAsync(new ScriptDirectoryChangedEvent(scripts));
         }).DebounceAsync();
     }
@@ -52,7 +52,7 @@ public class ScriptsFileWatcherBackgroundService : BackgroundService
         _scriptDirWatcher.Created += (_, ev) => _pushDirectoryChanged();
         _scriptDirWatcher.Deleted += (_, ev) => _pushDirectoryChanged();
         _scriptDirWatcher.Renamed += (_, ev) => _pushDirectoryChanged();
-        _scriptDirWatcher.Error += delegate(object sender, ErrorEventArgs args)
+        _scriptDirWatcher.Error += (_, args) =>
         {
             Logger.LogError(args.GetException(), "Error in FileSystemWatcher. Will re-initialize watcher");
             _scriptDirWatcher.Dispose();

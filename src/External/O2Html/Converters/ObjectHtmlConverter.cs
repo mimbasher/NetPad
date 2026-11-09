@@ -41,8 +41,7 @@ public class ObjectHtmlConverter : HtmlConverter
                 .AddText(name);
 
             // Add property value
-            var td = tr.AddAndGetElement("td")
-                .AddClass(htmlSerializer.SerializerOptions.CssClasses.PropertyValue);
+            var td = htmlSerializer.AddAndGetValueCell(tr, value);
 
             if (HtmlSerializer.TryGetNumericValueString(value, propertyType, out var numericValue))
             {
@@ -55,7 +54,7 @@ public class ObjectHtmlConverter : HtmlConverter
         return table;
     }
 
-    public override void WriteHtmlWithinTableRow<T>(Element tr, T obj, Type type, SerializationScope serializationScope, HtmlSerializer htmlSerializer)
+    public override void WriteHtmlWithinTableRow<T>(TableRow tr, T obj, Type type, SerializationScope serializationScope, HtmlSerializer htmlSerializer)
     {
         var properties = HtmlSerializer.GetReadableProperties(type);
 
@@ -64,8 +63,7 @@ public class ObjectHtmlConverter : HtmlConverter
             object? value = GetPropertyValue(property, ref obj!);
             var propertyType = value?.GetType() ?? property.PropertyType;
 
-            var td = tr.AddAndGetElement("td")
-                .AddClass(htmlSerializer.SerializerOptions.CssClasses.PropertyValue);
+            var td = htmlSerializer.AddAndGetValueCell(tr, value);
 
             if (HtmlSerializer.TryGetNumericValueString(value, propertyType, out var numericValue))
             {

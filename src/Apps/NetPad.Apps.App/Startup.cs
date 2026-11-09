@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http;
 using System.Reflection;
 using MediatR;
 using Microsoft.AspNetCore.Builder;
@@ -10,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NetPad.Apps;
 using NetPad.Apps.CQs;
+using NetPad.Apps.Security;
 using NetPad.Apps.Data.EntityFrameworkCore;
 using NetPad.Apps.Plugins;
 using NetPad.Apps.Resources;
@@ -23,6 +23,7 @@ using NetPad.Plugins.OmniSharp;
 using NetPad.Scripts;
 using NetPad.Services;
 using NetPad.Services.UiInterop;
+using ExceptionHandlerMiddleware = NetPad.Host.Middlewares.ExceptionHandlerMiddleware;
 
 namespace NetPad;
 
@@ -55,6 +56,7 @@ public class Startup
         services.AddCoreServices();
 
         // Application services
+        services.AddSingleton<SecurityToken>();
         services.AddSingleton<HostInfo>();
         services.AddTransient<ILogoService, LogoService>();
         services.AddTransient<IIpcService, SignalRIpcService>();
@@ -63,6 +65,11 @@ public class Startup
 
         // Script execution mechanism
         services.AddClientServerExecutionModel();
+
+        // Headless execution (for MCP server and API consumers)
+        services.AddTransient<HeadlessScriptRunnerFactory>();
+        services.AddTransient<HeadlessScriptExecutionService>();
+        services.AddSingleton<ScriptOutputCaptureService>();
 
         // Data connections
         services
@@ -112,11 +119,9 @@ public class Startup
         }
 
         // HttpClient
-        services.AddSingleton<HttpClient>(_ =>
+        services.AddHttpClient(string.Empty, httpClient =>
         {
-            var httpClient = new HttpClient();
             httpClient.Timeout = TimeSpan.FromMinutes(1);
-            return httpClient;
         });
 
         // SignalR
@@ -147,19 +152,21 @@ public class Startup
     {
         // Using DEBUG pre-processor symbol instead of checking environment. Reason is some users set
         // DOTNET_ENVIRONMENT (or similar variables) to "Development" globally, which breaks app in production.
-#if DEBUG
-        app.UseDeveloperExceptionPage();
-#else
-        app.UseExceptionHandler("/Error");
-        app.UseHsts();
-#endif
 
-        //app.UseHttpsRedirection();
+        app.UseMiddleware<ExceptionHandlerMiddleware>();
         app.UseStaticFiles();
 
 #if !DEBUG
-        app.UseSpaStaticFiles();
+        app.UseSpaStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = ctx =>
+            {
+                ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            }
+        });
 #endif
+
+        app.UseMiddleware<TokenValidationMiddleware>();
 
 #if DEBUG
         app.UseOpenApi();
@@ -167,8 +174,6 @@ public class Startup
 #endif
 
         InitializeHostInfo(app, env);
-
-        app.UseMiddleware<ExceptionHandlerMiddleware>();
 
         // Initialize plugins
         var pluginManager = app.ApplicationServices.GetRequiredService<IPluginManager>();
@@ -190,8 +195,18 @@ public class Startup
         app.UseSpa(spa =>
         {
             spa.Options.SourcePath = "App";
+            spa.Options.DefaultPageStaticFileOptions = new StaticFileOptions
+            {
+                OnPrepareResponse = ctx =>
+                {
+                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                    ctx.Context.Response.Headers["Pragma"] = "no-cache";
+                    ctx.Context.Response.Headers["Expires"] = "0";
+                }
+            };
 #if DEBUG
-            spa.UseProxyToSpaDevelopmentServer("http://localhost:9000/");
+            var spaDevServerPort = _configuration.GetValue("SpaDevServerPort", 9000);
+            spa.UseProxyToSpaDevelopmentServer($"http://localhost:{spaDevServerPort}/");
 #endif
         });
 
@@ -205,7 +220,7 @@ public class Startup
 
         var serverAddresses = app.ServerFeatures.Get<IServerAddressesFeature>()?.Addresses;
 
-        if (serverAddresses == null || !serverAddresses.Any())
+        if (serverAddresses == null || serverAddresses.Count == 0)
         {
             throw new Exception("No server urls specified. Specify the url with the '--urls' parameter");
         }
@@ -219,5 +234,8 @@ public class Startup
         }
 
         hostInfo.SetHostUrl(url);
+
+        var securityToken = app.ApplicationServices.GetRequiredService<SecurityToken>();
+        ConnectionFileManager.Write(url, securityToken.Token, Program.Shell?.GetType().Name);
     }
 }

@@ -1,0 +1,17 @@
+<template drop.trigger="itemDropped($event)">
+    <import from="./script-toolbar"></import>
+    <import from="core/@application/editor/text-editor"></import>
+
+    <script-toolbar viewable.bind="viewable"></script-toolbar>
+
+    <div class="text-editor-container flex-grow-height-restricted d-flex">
+        <div class="production-marker"
+             if.bind="viewable.hasProductionWarning"
+             title="This script's connection holds production data. Anything you run reaches it.">
+        </div>
+
+        <div class="flex-grow-1 min-w-0 d-flex flex-column">
+            <text-editor component.ref="editor"></text-editor>
+        </div>
+    </div>
+</template>

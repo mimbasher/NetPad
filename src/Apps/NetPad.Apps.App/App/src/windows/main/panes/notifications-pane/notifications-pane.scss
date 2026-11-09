@@ -1,0 +1,65 @@
+@use "styles/variables" as *;
+
+.notifications-list {
+    .notification-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line-soft);
+        font-size: $text-description;
+        color: var(--text-2);
+
+        &:last-child {
+            border-bottom: 0;
+        }
+
+        &:hover {
+            background: var(--bg2);
+        }
+    }
+
+    .notification-item-icon {
+        @include icon-size(13px);
+        margin-top: 1px;
+        flex-shrink: 0;
+    }
+
+    .notification-item-body {
+        flex: 1 1 auto;
+    }
+
+    .notification-item-header {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+
+    .notification-item-title {
+        font-size: $text-control;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    .notification-item-time {
+        margin-left: auto;
+        flex-shrink: 0;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--text-3);
+    }
+
+    .notification-item-text {
+        margin-top: 2px;
+        word-break: break-word;
+    }
+
+    .notification-item-close {
+        align-self: center;
+    }
+
+    .notification-item:hover .row-action {
+        visibility: visible;
+    }
+}

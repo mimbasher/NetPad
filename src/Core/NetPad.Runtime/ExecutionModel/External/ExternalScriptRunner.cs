@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Extensions.Logging;
 using NetPad.Application;
@@ -6,6 +6,7 @@ using NetPad.Compilation;
 using NetPad.Configuration;
 using NetPad.Data.Metadata;
 using NetPad.DotNet;
+using NetPad.Exceptions;
 using NetPad.IO;
 using NetPad.Packages;
 using NetPad.Presentation;
@@ -72,7 +73,7 @@ public sealed partial class ExternalScriptRunner : IScriptRunner
                 return;
             }
 
-            foreach (var writer in _externalOutputWriters)
+            foreach (var writer in _externalOutputWriters.ToArray())
             {
                 try
                 {
@@ -151,9 +152,13 @@ public sealed partial class ExternalScriptRunner : IScriptRunner
                 return RunResult.RunAttemptFailure();
             }
 
-            _ = _appStatusMessagePublisher.PublishAsync(_script.Id, "Running...");
+            _ = _appStatusMessagePublisher.PublishTransientAsync(_script.Id, "Running...");
 
             var exitCode = await _scriptProcess.WaitForExitTask;
+
+            // Flush any remaining buffered output. The debounced RawOutputHandler may
+            // still have queued items that haven't been pushed to output writers yet.
+            _rawOutputHandler.Flush();
 
             stopWatch.Stop();
             var elapsed = stopWatch.ElapsedMilliseconds;
@@ -175,10 +180,15 @@ public sealed partial class ExternalScriptRunner : IScriptRunner
                 _ => RunResult.ScriptCompletionFailure(elapsed)
             };
         }
+        catch (UnsupportedScriptKindException ex)
+        {
+            await _output.WriteAsync(new ScriptOutput(ScriptOutputKind.Error, ex.Message));
+            return RunResult.RunAttemptFailure();
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error running script");
-            await _output.WriteAsync(new ErrorScriptOutput(ex));
+            await _output.WriteAsync(new ScriptOutput(ScriptOutputKind.Error, ex.ToString()));
             return RunResult.RunAttemptFailure();
         }
         finally
@@ -207,6 +217,7 @@ public sealed partial class ExternalScriptRunner : IScriptRunner
             _logger.LogError(ex, "Error killing script process");
         }
 
+        _scriptProcess.Process.Dispose();
         _scriptProcess = null;
         return Task.CompletedTask;
     }
